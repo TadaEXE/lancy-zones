@@ -8,10 +8,10 @@ pub struct MonitorConfig {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Zone {
-    pub x: i32,
-    pub y: i32,
-    pub width: i32,
-    pub height: i32,
+    pub x: i16,
+    pub y: i16,
+    pub width: i16,
+    pub height: i16,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
