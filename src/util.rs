@@ -1,8 +1,14 @@
+use std::error::Error;
 use std::str;
 
+use serde::Deserialize;
+use serde::Serialize;
 use x11rb::connection::Connection;
 use x11rb::errors::ReplyOrIdError;
+use x11rb::protocol::randr;
 use x11rb::protocol::xproto::*;
+
+use crate::config::Zone;
 
 pub fn scan_windows<C: Connection>(
     con: &C,
@@ -36,4 +42,50 @@ pub fn scan_windows<C: Connection>(
     Ok(all_windows)
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct Monitor {
+    pub name: String,
+    pub x: i16,
+    pub y: i16,
+    pub width: u16,
+    pub height: u16,
+}
 
+pub fn get_monitors<C: Connection>(
+    conn: &C,
+    root_window: Window,
+) -> Result<Vec<Monitor>, ReplyOrIdError> {
+    let mut monitors = Vec::new();
+    let screen_resources = randr::get_screen_resources(conn, root_window)?.reply()?;
+    for s in screen_resources.outputs {
+        // can't combine these if statements because it's unstable
+        if let Ok(output_info) =
+            randr::get_output_info(&conn, s, screen_resources.config_timestamp)?.reply()
+        {
+            if output_info.connection == randr::Connection::CONNECTED {
+                match randr::get_crtc_info(
+                    &conn,
+                    output_info.crtc,
+                    screen_resources.config_timestamp,
+                )?
+                .reply()
+                {
+                    Ok(crtc_info) => {
+                        monitors.push(Monitor {
+                            name: String::from_utf8(output_info.name).unwrap(),
+                            x: crtc_info.x.try_into().unwrap(),
+                            y: crtc_info.y.try_into().unwrap(),
+                            width: crtc_info.width,
+                            height: crtc_info.height,
+                        });
+                    }
+                    Err(e) => {
+                        dbg!(e);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(monitors)
+}

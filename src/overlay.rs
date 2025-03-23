@@ -7,8 +7,10 @@ use x11rb::{
     protocol::{
         Event,
         shape::{self, ConnectionExt as _},
+        xinput::{ConnectionExt as _, Device, XIEventMask},
         xproto::{PixmapWrapper, *},
     },
+    reexports::x11rb_protocol::protocol::xinput,
     wrapper::ConnectionExt as _,
 };
 
@@ -24,6 +26,8 @@ pub struct AtomContainer {
     pub net_wm_state_above: u32,
     pub motif_wm_hints: u32,
     pub wm_window_opacity: u32,
+    pub wm_type: u32,
+    pub wm_type_notification: u32,
     pub no_decorations_hint: [u32; 5],
 }
 
@@ -43,6 +47,11 @@ impl AtomContainer {
             .intern_atom(false, b"_NET_WM_WINDOW_OPACITY")?
             .reply()?
             .atom;
+        let wm_type = conn.intern_atom(false, b"_NET_WM_TYPE")?.reply()?.atom;
+        let wm_type_notification = conn
+            .intern_atom(false, b"_NET_WM_WINDOW_TYPE_NOTIFICATION")?
+            .reply()?
+            .atom;
         Ok(Self {
             wm_protocols,
             wm_delete_window,
@@ -51,6 +60,8 @@ impl AtomContainer {
             motif_wm_hints,
             wm_window_opacity,
             no_decorations_hint: Self::NO_DECORATIONS_HINT,
+            wm_type,
+            wm_type_notification,
         })
     }
 }
@@ -84,7 +95,7 @@ impl<C: Connection> Colors<C> {
     }
 }
 
-pub struct OverlayWindow<'a, C: Connection> {
+struct OverlayWindow<'a, C: Connection> {
     conn: Rc<C>,
     screen: Rc<Screen>,
     monitor: &'a Monitor,
@@ -114,8 +125,14 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
                 .is_some(),
             "Shape extension is required."
         );
+        assert!(
+            conn.extension_information(xinput::X11_EXTENSION_NAME)
+                .unwrap()
+                .is_some(),
+            "XInput extension is required."
+        );
 
-        for zone in &*zones {
+        for zone in zones {
             assert!(
                 zone.x < monitor.width.try_into().unwrap()
                     && zone.y < monitor.height.try_into().unwrap(),
@@ -144,7 +161,7 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
 
         let alpha = alpha.clamp(0.0, 1.0);
 
-        dbg!(&*monitor);
+        dbg!(monitor);
 
         Ok(OverlayWindow {
             conn,
@@ -164,7 +181,8 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
     pub fn setup_window(mut self) -> Result<Self, ReplyOrIdError> {
         let win_aux = CreateWindowAux::new()
             .event_mask(EventMask::EXPOSURE | EventMask::STRUCTURE_NOTIFY)
-            .background_pixel(self.screen.white_pixel);
+            .background_pixel(self.screen.white_pixel)
+            .override_redirect(1);
         let opacity: u32 = (self.alpha * u32::MAX as f32) as u32;
         let wm_normal_hints = [
             15,                         // Flags: PMinSize | PMaxSize
@@ -234,6 +252,22 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             &wm_normal_hints,
         )?;
 
+        self.conn.change_property32(
+            PropMode::REPLACE,
+            self.win_id,
+            self.atoms.wm_type,
+            AtomEnum::ATOM,
+            &[self.atoms.wm_type_notification],
+        )?;
+
+        self.conn.change_property32(
+            PropMode::APPEND,
+            self.win_id,
+            self.atoms.net_wm_state,
+            AtomEnum::ATOM,
+            &[self.atoms.net_wm_state_above],
+        )?;
+
         self.pixmap = Some(PixmapWrapper::create_pixmap(
             self.conn.clone(),
             self.screen.root_depth,
@@ -241,6 +275,15 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             self.monitor.width,
             self.monitor.height,
         )?);
+
+        self.conn.shape_mask(
+            shape::SO::SET,
+            shape::SK::INPUT,
+            self.win_id,
+            0,
+            0,
+            self.pixmap.as_ref().unwrap().pixmap(),
+        )?;
 
         self.colors = Some(Colors::new(self.conn.clone(), self.win_id, &*self.screen)?);
 
@@ -279,6 +322,10 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
                     self.set_always_on_top()?;
                     need_reshape = true;
                 }
+                Event::UnmapNotify(_) => {
+                    // self.set_always_on_top()?;
+                    need_reshape = true;
+                }
                 Event::ClientMessage(e) => {
                     let data = e.data.as_data32();
                     if e.format == 32
@@ -291,6 +338,16 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
                 }
                 Event::Error(e) => {
                     println!("Got error {:?}", e);
+                }
+                Event::XinputRawButtonPress(e) => {
+                    if e.detail == 1 {
+                        self.show()?;
+                    }
+                }
+                Event::XinputRawButtonRelease(e) => {
+                    if e.detail == 1 {
+                        self.hide()?;
+                    }
                 }
                 e => {
                     println!("Got unhandled event {:?}", e);
@@ -341,9 +398,21 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
 
     pub fn find_active_zone(&mut self, x: i16, y: i16) {
         let mut i = 0;
-        for zone in &*self.zones {
-            if x >= zone.x && x <= zone.x + zone.width && y >= zone.y && y <= zone.y + zone.height {
+        for zone in self.zones {
+            if x >= zone.x + self.monitor.x
+                && x <= zone.x + zone.width + self.monitor.x
+                && y >= zone.y + self.monitor.y
+                && y <= zone.y + zone.height + self.monitor.y
+            {
                 self.active_zone = Some(i);
+                self.shape_window().unwrap();
+                self.draw_zones(
+                    self.win_id,
+                    self.colors.as_ref().unwrap().white.gcontext(),
+                    self.colors.as_ref().unwrap().black.gcontext(),
+                )
+                .unwrap();
+
                 return;
             }
             i += 1;
@@ -360,7 +429,7 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
     }
 
     fn draw_zones(&self, win_id: Window, c1: Gcontext, c2: Gcontext) -> Result<(), ReplyOrIdError> {
-        for zone in &*self.zones {
+        for zone in self.zones {
             let top = Rectangle {
                 x: zone.x,
                 y: zone.y,
@@ -489,19 +558,9 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
     }
 }
 
-#[derive(Debug, Clone)]
-enum OverlayMessage {
-    None,
-    StartUpdating,
-    StopUpdating,
-    ShutDown,
-}
-
 pub struct Overlay<'a, C: Connection> {
     conn: Rc<C>,
     windows: Vec<OverlayWindow<'a, C>>,
-    config: &'a Config,
-    atom_container: Rc<AtomContainer>,
     screen: Rc<Screen>,
 }
 
@@ -532,8 +591,6 @@ impl<'a, C: Connection> Overlay<'a, C> {
         Overlay {
             conn,
             windows,
-            config,
-            atom_container,
             screen,
         }
     }
@@ -541,43 +598,66 @@ impl<'a, C: Connection> Overlay<'a, C> {
     pub fn listen(&mut self) -> Result<(), ReplyOrIdError> {
         self.conn.change_window_attributes(
             self.screen.root,
-            &ChangeWindowAttributesAux::new()
-                .event_mask(EventMask::SUBSTRUCTURE_NOTIFY | EventMask::STRUCTURE_NOTIFY),
+            &ChangeWindowAttributesAux::new().event_mask(
+                EventMask::SUBSTRUCTURE_NOTIFY
+                    | EventMask::STRUCTURE_NOTIFY
+                    | EventMask::BUTTON_PRESS
+                    | EventMask::BUTTON_RELEASE,
+            ),
+        )?;
+        self.conn.xinput_xi_select_events(
+            self.screen.root,
+            &[xinput::EventMask {
+                deviceid: Device::ALL.into(),
+                mask: vec![XIEventMask::RAW_BUTTON_PRESS | XIEventMask::RAW_BUTTON_RELEASE],
+            }],
         )?;
         self.conn.flush()?;
 
+        let mut dragging = false;
+        let mut lmb = false;
         loop {
             let event = self.conn.wait_for_event()?;
-            let mut dragging = false;
+            let ctrl = self
+                .button_pressed(KeyButMask::CONTROL)
+                .unwrap_or_else(|_| false);
             match event {
                 Event::ConfigureNotify(e) => {
-                    if let Ok(ctrl) = self.ctrl_pressed() {
+                    if ctrl {
                         if !dragging && ctrl {
                             self.show();
                         }
                         dragging = ctrl;
                         self.find_active_zone(e.x, e.y);
-                        println!(
-                            "Window {} moved to: ({}, {}) ctrl_pressed: {}",
-                            e.window, e.x, e.y, ctrl
-                        );
+                    }
+                }
+                Event::XinputRawButtonPress(e) => {
+                    if e.detail == 1 {
+                        lmb = true;
+                    }
+                }
+                Event::XinputRawButtonRelease(e) => {
+                    if e.detail == 1 {
+                        lmb = false;
                     }
                 }
                 _ => {}
             }
 
+            if ctrl && lmb {
                 self.update();
-            if dragging {
+                self.conn.flush()?;
             } else {
                 self.hide();
+                self.conn.flush()?;
+                dragging = false;
             }
-            self.conn.flush()?;
         }
     }
 
-    fn ctrl_pressed(&self) -> Result<bool, ReplyOrIdError> {
+    fn button_pressed(&self, but: KeyButMask) -> Result<bool, ReplyOrIdError> {
         if let Ok(reply) = self.conn.query_pointer(self.screen.root)?.reply() {
-            Ok(reply.mask & KeyButMask::CONTROL != KeyButMask::from(0_u16))
+            Ok(reply.mask & but != KeyButMask::from(0_u16))
         } else {
             Ok(false)
         }
@@ -585,25 +665,25 @@ impl<'a, C: Connection> Overlay<'a, C> {
 
     fn update(&mut self) {
         for win in &mut self.windows {
-            win.update();
+            win.update().unwrap();
         }
     }
 
     fn find_active_zone(&mut self, x: i16, y: i16) {
-        for win in &mut self.windows {
+        for ref mut win in &mut self.windows {
             win.find_active_zone(x, y);
         }
     }
 
     fn show(&self) {
         for win in &self.windows {
-            win.show();
+            win.show().unwrap();
         }
     }
 
     fn hide(&self) {
         for win in &self.windows {
-            win.hide();
+            win.hide().unwrap();
         }
     }
 }
