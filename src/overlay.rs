@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use x11rb::{
     COPY_DEPTH_FROM_PARENT,
     connection::Connection,
@@ -53,22 +55,22 @@ impl AtomContainer {
     }
 }
 
-pub struct Colors<'a, C: Connection + 'a> {
-    white: GcontextWrapper<&'a C>,
-    black: GcontextWrapper<&'a C>,
+pub struct Colors<C: Connection> {
+    white: GcontextWrapper<Rc<C>>,
+    black: GcontextWrapper<Rc<C>>,
 }
 
-impl<'a, C: Connection + 'a> Colors<'a, C> {
-    pub fn new(conn: &'a C, win_id: Window, screen: &Screen) -> Result<Self, ReplyOrIdError> {
+impl<C: Connection> Colors<C> {
+    pub fn new(conn: Rc<C>, win_id: Window, screen: &Screen) -> Result<Self, ReplyOrIdError> {
         let white_gcw = GcontextWrapper::create_gc(
-            conn,
+            conn.clone(),
             win_id,
             &CreateGCAux::new()
                 .graphics_exposures(0)
                 .foreground(screen.white_pixel),
         )?;
         let black_gcw = GcontextWrapper::create_gc(
-            conn,
+            conn.clone(),
             win_id,
             &CreateGCAux::new()
                 .graphics_exposures(0)
@@ -82,27 +84,27 @@ impl<'a, C: Connection + 'a> Colors<'a, C> {
     }
 }
 
-pub struct OverlayWindow<'conn, 'b, 'internal, C: Connection + 'conn> {
-    conn: &'conn C,
-    screen: &'b Screen,
-    monitor: &'b Monitor,
-    zones: &'b [Zone],
-    pixmap: Option<PixmapWrapper<&'conn C>>,
+pub struct OverlayWindow<'a, C: Connection> {
+    conn: Rc<C>,
+    screen: Rc<Screen>,
+    monitor: &'a Monitor,
+    zones: &'a [Zone],
+    pixmap: Option<PixmapWrapper<Rc<C>>>,
     alpha: f32,
     win_id: Window,
-    atoms: &'b AtomContainer,
-    colors: Option<Colors<'conn, C>>,
-    active_zone: Option<&'internal Zone>,
+    atoms: Rc<AtomContainer>,
+    colors: Option<Colors<C>>,
+    active_zone: Option<usize>,
     line_thickness: u16,
 }
 
-impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'internal, C> {
+impl<'a, C: Connection> OverlayWindow<'a, C> {
     pub fn new(
-        conn: &'conn C,
-        screen: &'b Screen,
-        monitor: &'b Monitor,
-        zones: &'b [Zone],
-        atoms: &'b AtomContainer,
+        conn: Rc<C>,
+        screen: Rc<Screen>,
+        monitor: &'a Monitor,
+        zones: &'a [Zone],
+        atoms: Rc<AtomContainer>,
         alpha: f32,
         line_thickness: u16,
     ) -> Result<Self, ReplyOrIdError> {
@@ -113,7 +115,7 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
             "Shape extension is required."
         );
 
-        for zone in zones {
+        for zone in &*zones {
             assert!(
                 zone.x < monitor.width.try_into().unwrap()
                     && zone.y < monitor.height.try_into().unwrap(),
@@ -142,13 +144,13 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
 
         let alpha = alpha.clamp(0.0, 1.0);
 
-        dbg!(monitor);
+        dbg!(&*monitor);
 
         Ok(OverlayWindow {
             conn,
             screen,
             monitor,
-            zones,
+            zones: &zones,
             pixmap: None,
             alpha,
             win_id,
@@ -233,14 +235,14 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
         )?;
 
         self.pixmap = Some(PixmapWrapper::create_pixmap(
-            self.conn,
+            self.conn.clone(),
             self.screen.root_depth,
             self.win_id,
             self.monitor.width,
             self.monitor.height,
         )?);
 
-        self.colors = Some(Colors::new(self.conn, self.win_id, self.screen)?);
+        self.colors = Some(Colors::new(self.conn.clone(), self.win_id, &*self.screen)?);
 
         self.conn.flush()?;
 
@@ -265,7 +267,7 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
                 }
                 Event::ConfigureNotify(_) => {
                     self.pixmap = Some(PixmapWrapper::create_pixmap(
-                        self.conn,
+                        self.conn.clone(),
                         self.screen.root_depth,
                         self.win_id,
                         self.monitor.width,
@@ -337,12 +339,14 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
         Ok(())
     }
 
-    pub fn find_active_zone(&'internal mut self, x: i16, y: i16) {
-        for zone in self.zones {
+    pub fn find_active_zone(&mut self, x: i16, y: i16) {
+        let mut i = 0;
+        for zone in &*self.zones {
             if x >= zone.x && x <= zone.x + zone.width && y >= zone.y && y <= zone.y + zone.height {
-                self.active_zone = Some(zone);
+                self.active_zone = Some(i);
                 return;
             }
+            i += 1;
         }
         self.active_zone = None;
     }
@@ -356,7 +360,7 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
     }
 
     fn draw_zones(&self, win_id: Window, c1: Gcontext, c2: Gcontext) -> Result<(), ReplyOrIdError> {
-        for zone in self.zones {
+        for zone in &*self.zones {
             let top = Rectangle {
                 x: zone.x,
                 y: zone.y,
@@ -406,6 +410,7 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
         let colors = self.colors.as_ref().expect("Colors not setup");
 
         if let Some(zone) = self.active_zone {
+            let zone = &self.zones[zone];
             let rect = Rectangle {
                 x: zone.x,
                 y: zone.y,
@@ -421,7 +426,7 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
 
     fn shape_window(&self) -> Result<(), ReplyOrIdError> {
         let pixmap = PixmapWrapper::create_pixmap(
-            self.conn,
+            self.conn.clone(),
             1,
             self.win_id,
             self.monitor.width,
@@ -429,7 +434,7 @@ impl<'conn, 'b, 'internal, C: Connection + 'conn> OverlayWindow<'conn, 'b, 'inte
         )?;
         // Make transparent
         let gc = GcontextWrapper::create_gc(
-            self.conn,
+            self.conn.clone(),
             pixmap.pixmap(),
             &CreateGCAux::new().graphics_exposures(0).foreground(0),
         )?;
@@ -492,32 +497,30 @@ enum OverlayMessage {
     ShutDown,
 }
 
-pub struct Overlay<'conn, 'b, 'internal, C: Connection + 'conn> {
-    conn: &'conn C,
-    windows: Vec<OverlayWindow<'conn, 'b, 'internal, C>>,
-    config: &'conn Config,
-    atom_container: &'conn AtomContainer,
-    screen: &'conn Screen,
+pub struct Overlay<'a, C: Connection> {
+    conn: Rc<C>,
+    windows: Vec<OverlayWindow<'a, C>>,
+    config: &'a Config,
+    atom_container: Rc<AtomContainer>,
+    screen: Rc<Screen>,
 }
 
-impl<'conn: 'b + 'internal, 'internal, 'b: 'internal, C: Connection + 'conn>
-    Overlay<'conn, 'b, 'internal, C>
-{
+impl<'a, C: Connection> Overlay<'a, C> {
     pub fn new(
-        conn: &'conn C,
-        config: &'conn Config,
-        screen: &'conn Screen,
-        atom_container: &'conn AtomContainer,
+        conn: Rc<C>,
+        config: &'a Config,
+        screen: Rc<Screen>,
+        atom_container: Rc<AtomContainer>,
     ) -> Self {
         let mut windows = Vec::new();
 
         for mc in &config.monitor_configs {
             let window = OverlayWindow::new(
-                conn,
-                screen,
+                conn.clone(),
+                screen.clone(),
                 &mc.monitor,
                 &mc.zones,
-                &atom_container,
+                atom_container.clone(),
                 0.5,
                 2,
             )
@@ -535,7 +538,7 @@ impl<'conn: 'b + 'internal, 'internal, 'b: 'internal, C: Connection + 'conn>
         }
     }
 
-    pub fn listen(&'internal mut self) -> Result<(), ReplyOrIdError> {
+    pub fn listen(&mut self) -> Result<(), ReplyOrIdError> {
         self.conn.change_window_attributes(
             self.screen.root,
             &ChangeWindowAttributesAux::new()
@@ -549,6 +552,9 @@ impl<'conn: 'b + 'internal, 'internal, 'b: 'internal, C: Connection + 'conn>
             match event {
                 Event::ConfigureNotify(e) => {
                     if let Ok(ctrl) = self.ctrl_pressed() {
+                        if !dragging && ctrl {
+                            self.show();
+                        }
                         dragging = ctrl;
                         self.find_active_zone(e.x, e.y);
                         println!(
@@ -559,6 +565,13 @@ impl<'conn: 'b + 'internal, 'internal, 'b: 'internal, C: Connection + 'conn>
                 }
                 _ => {}
             }
+
+                self.update();
+            if dragging {
+            } else {
+                self.hide();
+            }
+            self.conn.flush()?;
         }
     }
 
@@ -576,7 +589,7 @@ impl<'conn: 'b + 'internal, 'internal, 'b: 'internal, C: Connection + 'conn>
         }
     }
 
-    fn find_active_zone(&'internal mut self, x: i16, y: i16) {
+    fn find_active_zone(&mut self, x: i16, y: i16) {
         for win in &mut self.windows {
             win.find_active_zone(x, y);
         }
