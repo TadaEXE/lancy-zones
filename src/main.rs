@@ -1,12 +1,10 @@
 use std::rc::Rc;
 
-use config::{Config, MonitorConfig};
+use config::{Config, MonitorConfig, WmCounterPadding};
 use x11rb::connection::Connection;
 
 mod config;
 mod overlay;
-mod overlayold;
-mod system_listener;
 mod util;
 
 use crate::config::Zone;
@@ -35,10 +33,18 @@ fn main() {
     let zones = vec![zone1, zone2];
     let monitors = util::get_monitors(&conn, screen.root).unwrap();
 
+    let cp = WmCounterPadding {
+        x: -24,
+        y: -23,
+        w: 53,
+        h: 52,
+    };
+
     let mc = MonitorConfig {
         name: "test".to_string(),
         zones,
         monitor: monitors[2].clone(),
+        counter_padding: cp,
     };
 
     let config = Config {

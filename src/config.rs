@@ -3,10 +3,20 @@ use serde::{Deserialize, Serialize};
 use crate::util::Monitor;
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct WmCounterPadding {
+    pub x: i16,
+    pub y: i16,
+    pub w: i16,
+    pub h: i16,
+}
+
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct MonitorConfig {
     pub name: String,
     pub zones: Vec<Zone>,
     pub monitor: Monitor,
+    pub counter_padding: WmCounterPadding,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

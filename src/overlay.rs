@@ -1,9 +1,10 @@
-use std::rc::Rc;
+use std::{rc::Rc, thread::sleep, time::Duration};
 
 use x11rb::{
     COPY_DEPTH_FROM_PARENT,
     connection::Connection,
     errors::ReplyOrIdError,
+    properties::{WmSizeHints, WmSizeHintsSpecification},
     protocol::{
         Event,
         shape::{self, ConnectionExt as _},
@@ -15,7 +16,7 @@ use x11rb::{
 };
 
 use crate::{
-    config::{Config, Zone},
+    config::{Config, WmCounterPadding, Zone},
     util::Monitor,
 };
 
@@ -107,6 +108,7 @@ struct OverlayWindow<'a, C: Connection> {
     colors: Option<Colors<C>>,
     active_zone: Option<usize>,
     line_thickness: u16,
+    counter_padding: &'a WmCounterPadding,
 }
 
 impl<'a, C: Connection> OverlayWindow<'a, C> {
@@ -118,6 +120,7 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         atoms: Rc<AtomContainer>,
         alpha: f32,
         line_thickness: u16,
+        counter_padding: &'a WmCounterPadding,
     ) -> Result<Self, ReplyOrIdError> {
         assert!(
             conn.extension_information(shape::X11_EXTENSION_NAME)
@@ -175,6 +178,7 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             colors: None,
             active_zone: None,
             line_thickness,
+            counter_padding,
         })
     }
 
@@ -383,6 +387,50 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         Ok(shutdown)
     }
 
+    pub fn snap_to_zone(&mut self, win: u32) -> Result<(), ReplyOrIdError> {
+        if let Some(zone) = self.active_zone {
+            let zone = &self.zones[zone];
+            let conf = ConfigureWindowAux::new()
+                .x(i32::from(zone.x + self.monitor.x + self.counter_padding.x))
+                .y(i32::from(zone.y + self.monitor.y + self.counter_padding.y))
+                .width(u32::try_from(zone.width + self.counter_padding.w).unwrap())
+                .height(u32::try_from(zone.height + self.counter_padding.h).unwrap())
+                .stack_mode(StackMode::ABOVE);
+
+            self.conn.change_window_attributes(
+                win,
+                &ChangeWindowAttributesAux::new().win_gravity(Gravity::NORTH_WEST),
+            )?;
+            println!("Snapping to {:?} on monitor {:?}", zone, self.monitor);
+            self.conn.configure_window(win, &conf)?;
+            self.conn.flush()?;
+            self.active_zone = None;
+        }
+        Ok(())
+    }
+
+    fn get_correction_zone(&self, win: u32, target: &Zone) -> Result<Zone, ReplyOrIdError> {
+        let geom = self.conn.get_geometry(win)?.reply()?;
+        let trans = self
+            .conn
+            .translate_coordinates(win, self.screen.root, geom.x, geom.y)?
+            .reply()?;
+        println!("x{} y{} w{} h{}", geom.x, geom.y, geom.width, geom.height);
+        println!("tx{} ty{}", trans.dst_x, trans.dst_y);
+
+        let d_x = target.x - geom.x;
+        let d_y = target.y - geom.y;
+        let d_w = i16::try_from(geom.width).unwrap() - target.width;
+        let d_h = i16::try_from(geom.height).unwrap() - target.height;
+
+        Ok(Zone {
+            id: 0,
+            x: d_x,
+            y: d_y,
+            width: d_w,
+            height: d_h,
+        })
+    }
     pub fn show(&self) -> Result<(), ReplyOrIdError> {
         self.conn.map_window(self.win_id)?;
         self.move_window_to_monitor()?;
@@ -582,6 +630,7 @@ impl<'a, C: Connection> Overlay<'a, C> {
                 atom_container.clone(),
                 0.5,
                 2,
+                &mc.counter_padding,
             )
             .unwrap()
             .setup_window()
@@ -616,6 +665,7 @@ impl<'a, C: Connection> Overlay<'a, C> {
 
         let mut dragging = false;
         let mut lmb = false;
+        let mut win: Option<u32> = None;
         loop {
             let event = self.conn.wait_for_event()?;
             let ctrl = self
@@ -623,11 +673,12 @@ impl<'a, C: Connection> Overlay<'a, C> {
                 .unwrap_or_else(|_| false);
             match event {
                 Event::ConfigureNotify(e) => {
-                    if ctrl {
-                        if !dragging && ctrl {
+                    if ctrl && lmb {
+                        if !dragging {
                             self.show();
                         }
-                        dragging = ctrl;
+                        dragging = ctrl && lmb;
+                        win = Some(e.window);
                         self.find_active_zone(e.x, e.y);
                     }
                 }
@@ -647,11 +698,26 @@ impl<'a, C: Connection> Overlay<'a, C> {
             if ctrl && lmb {
                 self.update();
                 self.conn.flush()?;
+            } else if !lmb && ctrl {
+                if let Some(snap_to) = win {
+                    self.snap_to_zone(snap_to);
+                    win = None;
+                }
+                self.hide();
+                self.conn.flush()?;
+                dragging = false;
             } else {
                 self.hide();
                 self.conn.flush()?;
                 dragging = false;
             }
+        }
+    }
+
+    fn snap_to_zone(&mut self, win: u32) {
+        println!("Snap");
+        for ow in &mut self.windows {
+            ow.snap_to_zone(win).unwrap();
         }
     }
 
