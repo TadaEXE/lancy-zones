@@ -16,7 +16,7 @@ use x11rb::{
 };
 
 use crate::{
-    config::{Config, WmCounterPadding, Zone},
+    config::{Config, Zone},
     util::Monitor,
 };
 
@@ -29,6 +29,8 @@ pub struct AtomContainer {
     pub wm_window_opacity: u32,
     pub wm_type: u32,
     pub wm_type_notification: u32,
+    pub net_extents: u32,
+    pub gtk_extents: u32,
     pub no_decorations_hint: [u32; 5],
 }
 
@@ -53,6 +55,15 @@ impl AtomContainer {
             .intern_atom(false, b"_NET_WM_WINDOW_TYPE_NOTIFICATION")?
             .reply()?
             .atom;
+        let net_extents = conn
+            .intern_atom(false, b"_NET_FRAME_EXTENTS")?
+            .reply()?
+            .atom;
+        let gtk_extents = conn
+            .intern_atom(false, b"_GTK_FRAME_EXTENTS")?
+            .reply()?
+            .atom;
+
         Ok(Self {
             wm_protocols,
             wm_delete_window,
@@ -63,6 +74,8 @@ impl AtomContainer {
             no_decorations_hint: Self::NO_DECORATIONS_HINT,
             wm_type,
             wm_type_notification,
+            net_extents,
+            gtk_extents,
         })
     }
 }
@@ -108,7 +121,6 @@ struct OverlayWindow<'a, C: Connection> {
     colors: Option<Colors<C>>,
     active_zone: Option<usize>,
     line_thickness: u16,
-    counter_padding: &'a WmCounterPadding,
 }
 
 impl<'a, C: Connection> OverlayWindow<'a, C> {
@@ -120,7 +132,6 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         atoms: Rc<AtomContainer>,
         alpha: f32,
         line_thickness: u16,
-        counter_padding: &'a WmCounterPadding,
     ) -> Result<Self, ReplyOrIdError> {
         assert!(
             conn.extension_information(shape::X11_EXTENSION_NAME)
@@ -178,7 +189,6 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             colors: None,
             active_zone: None,
             line_thickness,
-            counter_padding,
         })
     }
 
@@ -391,11 +401,13 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         if let Some(zone) = self.active_zone {
             let zone = &self.zones[zone];
             let conf = ConfigureWindowAux::new()
-                .x(i32::from(zone.x + self.monitor.x + self.counter_padding.x))
-                .y(i32::from(zone.y + self.monitor.y + self.counter_padding.y))
-                .width(u32::try_from(zone.width + self.counter_padding.w).unwrap())
-                .height(u32::try_from(zone.height + self.counter_padding.h).unwrap())
+                .x(i32::from(zone.x + self.monitor.x))
+                .y(i32::from(zone.y + self.monitor.y))
+                .width(u32::try_from(zone.width).unwrap())
+                .height(u32::try_from(zone.height).unwrap())
                 .stack_mode(StackMode::ABOVE);
+
+            self.disable_window_padding(win)?;
 
             self.conn.change_window_attributes(
                 win,
@@ -409,28 +421,25 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         Ok(())
     }
 
-    fn get_correction_zone(&self, win: u32, target: &Zone) -> Result<Zone, ReplyOrIdError> {
-        let geom = self.conn.get_geometry(win)?.reply()?;
-        let trans = self
-            .conn
-            .translate_coordinates(win, self.screen.root, geom.x, geom.y)?
-            .reply()?;
-        println!("x{} y{} w{} h{}", geom.x, geom.y, geom.width, geom.height);
-        println!("tx{} ty{}", trans.dst_x, trans.dst_y);
-
-        let d_x = target.x - geom.x;
-        let d_y = target.y - geom.y;
-        let d_w = i16::try_from(geom.width).unwrap() - target.width;
-        let d_h = i16::try_from(geom.height).unwrap() - target.height;
-
-        Ok(Zone {
-            id: 0,
-            x: d_x,
-            y: d_y,
-            width: d_w,
-            height: d_h,
-        })
+    fn disable_window_padding(&self, win: u32) -> Result<(), ReplyOrIdError> {
+        let no_extents = [0, 0, 0, 0];
+        let _ = self.conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            self.atoms.net_extents,
+            AtomEnum::CARDINAL,
+            &no_extents,
+        );
+        let _ = self.conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            self.atoms.gtk_extents,
+            AtomEnum::CARDINAL,
+            &no_extents,
+        );
+        Ok(())
     }
+
     pub fn show(&self) -> Result<(), ReplyOrIdError> {
         self.conn.map_window(self.win_id)?;
         self.move_window_to_monitor()?;
@@ -630,7 +639,6 @@ impl<'a, C: Connection> Overlay<'a, C> {
                 atom_container.clone(),
                 0.5,
                 2,
-                &mc.counter_padding,
             )
             .unwrap()
             .setup_window()
@@ -694,7 +702,6 @@ impl<'a, C: Connection> Overlay<'a, C> {
                 }
                 _ => {}
             }
-
             if ctrl && lmb {
                 self.update();
                 self.conn.flush()?;
