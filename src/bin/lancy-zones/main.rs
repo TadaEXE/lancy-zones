@@ -1,11 +1,10 @@
+mod overlay;
 use std::rc::Rc;
 
 use config::{Config, MonitorConfig};
 use x11rb::connection::Connection;
 
-mod config;
-mod overlay;
-mod util;
+use lancy_zones::{config, util};
 
 use crate::config::Zone;
 use crate::overlay::{AtomContainer, Overlay};
@@ -46,20 +45,4 @@ fn main() {
     let screen = Rc::new(screen);
     let mut overlay = Overlay::new(conn, &config, screen, atoms);
     overlay.listen().unwrap();
-    // let mut overlay = OverlayWindow::new(&conn, &screen, &monitors[2], zones, &atoms, 0.5, 2)
-    //     .unwrap()
-    //     .setup_window()
-    //     .unwrap();
-    //
-    // overlay.show().unwrap();
-    // loop {
-    //     overlay.update().unwrap();
-    // }
-
-    // let mut o = overlayold::Overlay::new(&conn, screen_num, zones, &monitors[0]).unwrap();
-    // o.run_until(|| true).unwrap();
-
-    // system_listener::listen().unwrap();
-    // let monitors = util::get_monitors(&conn, *root_window).unwrap();
-    // dbg!(monitors);
 }

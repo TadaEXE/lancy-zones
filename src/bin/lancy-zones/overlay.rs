@@ -698,10 +698,22 @@ impl<'a, C: Connection> Overlay<'a, C> {
                 Event::XinputRawButtonRelease(e) => {
                     if e.detail == 1 {
                         lmb = false;
+                        let ctrl = self
+                            .button_pressed(KeyButMask::CONTROL)
+                            .unwrap_or_else(|_| false);
+                        if !ctrl && dragging {
+                            if let Some(win) = win {
+                                self.snap_to_zone(win);
+                                self.hide();
+                            }
+                        }
                     }
                 }
                 _ => {}
             }
+            let ctrl = self
+                .button_pressed(KeyButMask::CONTROL)
+                .unwrap_or_else(|_| false);
             if ctrl && lmb {
                 self.update();
                 self.conn.flush()?;
