@@ -121,6 +121,7 @@ struct OverlayWindow<'a, C: Connection> {
     colors: Option<Colors<C>>,
     active_zone: Option<usize>,
     line_thickness: u16,
+    win_hack: Option<u32>,
 }
 
 impl<'a, C: Connection> OverlayWindow<'a, C> {
@@ -189,6 +190,7 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             colors: None,
             active_zone: None,
             line_thickness,
+            win_hack: None,
         })
     }
 
@@ -350,18 +352,19 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
                         shutdown = true;
                     }
                 }
-                Event::Error(e) => {
-                    println!("Got error {:?}", e);
-                }
-                Event::XinputRawButtonPress(e) => {
-                    if e.detail == 1 {
-                        self.show()?;
-                    }
-                }
                 Event::XinputRawButtonRelease(e) => {
                     if e.detail == 1 {
-                        self.hide()?;
+                        if let Some(active_win) = self.win_hack {
+                            self.snap_to_zone(active_win)?;
+                            self.win_hack = None;
+                            self.hide()?;
+                        } else {
+                            println!("Got no win");
+                        }
                     }
+                }
+                Event::Error(e) => {
+                    println!("Got error {:?}", e);
                 }
                 e => {
                     println!("Got unhandled event {:?}", e);
@@ -653,87 +656,88 @@ impl<'a, C: Connection> Overlay<'a, C> {
     }
 
     pub fn listen(&mut self) -> Result<(), ReplyOrIdError> {
-        self.conn.change_window_attributes(
-            self.screen.root,
-            &ChangeWindowAttributesAux::new().event_mask(
-                EventMask::SUBSTRUCTURE_NOTIFY
-                    | EventMask::STRUCTURE_NOTIFY
-                    | EventMask::BUTTON_PRESS
-                    | EventMask::BUTTON_RELEASE,
-            ),
+        // let (conn, screen_num) = x11rb::connect(None).unwrap();
+        // let screen = conn.setup().roots[screen_num].clone();
+        let conn = self.conn.clone();
+        let screen = self.screen.clone();
+        conn.change_window_attributes(
+            screen.root,
+            &ChangeWindowAttributesAux::new()
+                .event_mask(EventMask::SUBSTRUCTURE_NOTIFY | EventMask::STRUCTURE_NOTIFY),
         )?;
-        self.conn.xinput_xi_select_events(
-            self.screen.root,
+        conn.xinput_xi_select_events(
+            screen.root,
             &[xinput::EventMask {
                 deviceid: Device::ALL.into(),
-                mask: vec![XIEventMask::RAW_BUTTON_PRESS | XIEventMask::RAW_BUTTON_RELEASE],
+                mask: vec![XIEventMask::RAW_KEY_RELEASE | XIEventMask::RAW_BUTTON_RELEASE],
             }],
         )?;
-        self.conn.flush()?;
+        conn.flush()?;
 
-        let mut dragging = false;
-        let mut lmb = false;
+        let mut last_is_showing;
+        let mut is_showing = false;
         let mut win: Option<u32> = None;
         loop {
-            let event = self.conn.wait_for_event()?;
-            let ctrl = self
-                .button_pressed(KeyButMask::CONTROL)
-                .unwrap_or_else(|_| false);
-            match event {
-                Event::ConfigureNotify(e) => {
-                    if ctrl && lmb {
-                        if !dragging {
-                            self.show();
+            let event = conn.wait_for_event()?;
+            let mut event_op = Some(event.clone());
+            last_is_showing = is_showing;
+            while let Some(event) = event_op {
+                let ctrl = self
+                    .button_pressed(KeyButMask::CONTROL)
+                    .unwrap_or_else(|_| false);
+                match event {
+                    Event::ConfigureNotify(e) => {
+                        if ctrl {
+                            is_showing = true;
+                            win = Some(e.window);
+                            self.set_window_hack(win);
+                            self.find_active_zone(e.x, e.y);
                         }
-                        dragging = ctrl && lmb;
-                        win = Some(e.window);
-                        self.find_active_zone(e.x, e.y);
                     }
-                }
-                Event::XinputRawButtonPress(e) => {
-                    if e.detail == 1 {
-                        lmb = true;
+                    Event::XinputRawKeyRelease(e) => {
+                        if e.detail == 37 && is_showing {
+                            println!("ctrl res");
+                            is_showing = false;
+                        }
                     }
-                }
-                Event::XinputRawButtonRelease(e) => {
-                    if e.detail == 1 {
-                        lmb = false;
-                        let ctrl = self
-                            .button_pressed(KeyButMask::CONTROL)
-                            .unwrap_or_else(|_| false);
-                        if !ctrl && dragging {
-                            if let Some(win) = win {
-                                self.snap_to_zone(win);
-                                self.hide();
+                    Event::XinputRawButtonRelease(e) => {
+                        if e.detail == 1 {
+                            if is_showing && ctrl {
+                                if let Some(active_win) = win {
+                                    // self.snap_to_zone(active_win);
+                                    win = None;
+                                    self.set_window_hack(win);
+                                } else {
+                                    println!("Got no win outer");
+                                }
+                                is_showing = false;
                             }
                         }
                     }
+                    _ => {}
                 }
-                _ => {}
+                event_op = conn.poll_for_event()?;
             }
-            let ctrl = self
-                .button_pressed(KeyButMask::CONTROL)
-                .unwrap_or_else(|_| false);
-            if ctrl && lmb {
-                self.update();
-                self.conn.flush()?;
-            } else if !lmb && ctrl {
-                if let Some(snap_to) = win {
-                    self.snap_to_zone(snap_to);
-                    win = None;
+            if last_is_showing != is_showing {
+                if is_showing {
+                    self.show();
+                } else {
+                    self.hide();
                 }
-                self.hide();
-                self.conn.flush()?;
-                dragging = false;
-            } else {
-                self.hide();
-                self.conn.flush()?;
-                dragging = false;
+            }
+            if is_showing {
+                self.update();
             }
         }
     }
 
-    fn snap_to_zone(&mut self, win: u32) {
+    fn set_window_hack(&mut self, win: Option<u32>) {
+        for ow in &mut self.windows {
+            ow.win_hack = win;
+        }
+    }
+
+    pub fn snap_to_zone(&mut self, win: u32) {
         println!("Snap");
         for ow in &mut self.windows {
             ow.snap_to_zone(win).unwrap();
@@ -748,27 +752,30 @@ impl<'a, C: Connection> Overlay<'a, C> {
         }
     }
 
-    fn update(&mut self) {
+    pub fn update(&mut self) {
         for win in &mut self.windows {
             win.update().unwrap();
         }
+        self.conn.flush().unwrap();
     }
 
-    fn find_active_zone(&mut self, x: i16, y: i16) {
+    pub fn find_active_zone(&mut self, x: i16, y: i16) {
         for ref mut win in &mut self.windows {
             win.find_active_zone(x, y);
         }
     }
 
-    fn show(&self) {
+    pub fn show(&self) {
         for win in &self.windows {
             win.show().unwrap();
         }
+        self.conn.flush().unwrap();
     }
 
-    fn hide(&self) {
+    pub fn hide(&self) {
         for win in &self.windows {
             win.hide().unwrap();
         }
+        self.conn.flush().unwrap();
     }
 }
