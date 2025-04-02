@@ -1,5 +1,4 @@
 mod overlay;
-mod ostm;
 use std::rc::Rc;
 
 use config::{Config, MonitorConfig};

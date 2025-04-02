@@ -121,7 +121,6 @@ struct OverlayWindow<'a, C: Connection> {
     colors: Option<Colors<C>>,
     active_zone: Option<usize>,
     line_thickness: u16,
-    win_hack: Option<u32>,
 }
 
 impl<'a, C: Connection> OverlayWindow<'a, C> {
@@ -190,7 +189,6 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             colors: None,
             active_zone: None,
             line_thickness,
-            win_hack: None,
         })
     }
 
@@ -306,98 +304,6 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         self.conn.flush()?;
 
         Ok(self)
-    }
-
-    pub fn update(&mut self) -> Result<bool, ReplyOrIdError> {
-        self.conn.flush()?;
-
-        let mut need_redraw = false;
-        let mut need_reshape = false;
-        let mut shutdown = false;
-
-        let event = self.conn.wait_for_event()?;
-        let mut event_op = Some(event);
-        while let Some(event) = event_op {
-            match event {
-                Event::Expose(e) => {
-                    if e.count == 0 {
-                        need_redraw = true;
-                    }
-                }
-                Event::ConfigureNotify(_) => {
-                    self.pixmap = Some(PixmapWrapper::create_pixmap(
-                        self.conn.clone(),
-                        self.screen.root_depth,
-                        self.win_id,
-                        self.monitor.width,
-                        self.monitor.height,
-                    )?);
-                    need_reshape = true;
-                }
-                Event::MapNotify(_) => {
-                    self.set_always_on_top()?;
-                    need_reshape = true;
-                }
-                Event::UnmapNotify(_) => {
-                    // self.set_always_on_top()?;
-                    need_reshape = true;
-                }
-                Event::ClientMessage(e) => {
-                    let data = e.data.as_data32();
-                    if e.format == 32
-                        && e.window == self.win_id
-                        && data[0] == self.atoms.wm_delete_window
-                    {
-                        println!("Shutting down");
-                        shutdown = true;
-                    }
-                }
-                Event::XinputRawButtonRelease(e) => {
-                    if e.detail == 1 {
-                        if let Some(active_win) = self.win_hack {
-                            self.snap_to_zone(active_win)?;
-                            self.win_hack = None;
-                            self.hide()?;
-                        } else {
-                            println!("Got no win");
-                        }
-                    }
-                }
-                Event::Error(e) => {
-                    println!("Got error {:?}", e);
-                }
-                e => {
-                    println!("Got unhandled event {:?}", e);
-                }
-            }
-
-            event_op = self.conn.poll_for_event()?;
-        }
-        if need_reshape {
-            self.shape_window()?;
-        }
-        if need_redraw {
-            let pixmap = self.pixmap.as_ref().expect("Pixmap not setup");
-            let colors = self.colors.as_ref().expect("Colors not setup");
-            self.draw_zones(
-                self.win_id,
-                colors.white.gcontext(),
-                colors.black.gcontext(),
-            )?;
-            self.conn.copy_area(
-                pixmap.pixmap(),
-                self.win_id,
-                colors.white.gcontext(),
-                self.monitor.x,
-                self.monitor.y,
-                self.monitor.x,
-                self.monitor.x,
-                self.monitor.width,
-                self.monitor.height,
-            )?;
-            self.conn.flush()?;
-        }
-        Ok(shutdown)
     }
 
     pub fn snap_to_zone(&mut self, win: u32) -> Result<(), ReplyOrIdError> {
@@ -593,29 +499,6 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
 
         Ok(())
     }
-
-    fn set_always_on_top(&self) -> Result<(), ReplyOrIdError> {
-        let data = ClientMessageData::from([1, self.atoms.net_wm_state_above, 0, 0, 0]); // 1 = _NET_WM_STATE_ADD
-
-        let msg = ClientMessageEvent {
-            response_type: CLIENT_MESSAGE_EVENT,
-            format: 32,
-            window: self.win_id,
-            type_: self.atoms.net_wm_state,
-            data,
-            sequence: 0,
-        };
-
-        self.conn.send_event(
-            false,
-            self.screen.root,
-            EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
-            msg,
-        )?;
-
-        self.conn.flush()?;
-        Ok(())
-    }
 }
 
 pub struct Overlay<'a, C: Connection> {
@@ -656,89 +539,66 @@ impl<'a, C: Connection> Overlay<'a, C> {
     }
 
     pub fn listen(&mut self) -> Result<(), ReplyOrIdError> {
-        // let (conn, screen_num) = x11rb::connect(None).unwrap();
-        // let screen = conn.setup().roots[screen_num].clone();
-        let conn = self.conn.clone();
-        let screen = self.screen.clone();
-        conn.change_window_attributes(
-            screen.root,
+        self.conn.change_window_attributes(
+            self.screen.root,
             &ChangeWindowAttributesAux::new()
                 .event_mask(EventMask::SUBSTRUCTURE_NOTIFY | EventMask::STRUCTURE_NOTIFY),
         )?;
-        conn.xinput_xi_select_events(
-            screen.root,
+        self.conn.xinput_xi_select_events(
+            self.screen.root,
             &[xinput::EventMask {
                 deviceid: Device::ALL.into(),
                 mask: vec![XIEventMask::RAW_KEY_RELEASE | XIEventMask::RAW_BUTTON_RELEASE],
             }],
         )?;
-        conn.flush()?;
+        self.conn.flush()?;
 
-        let mut last_is_showing;
         let mut is_showing = false;
         let mut win: Option<u32> = None;
         loop {
-            let event = conn.wait_for_event()?;
-            let mut event_op = Some(event.clone());
-            last_is_showing = is_showing;
-            while let Some(event) = event_op {
-                let ctrl = self
-                    .button_pressed(KeyButMask::CONTROL)
-                    .unwrap_or_else(|_| false);
-                match event {
-                    Event::ConfigureNotify(e) => {
-                        if ctrl {
+            let event = self.conn.wait_for_event()?;
+            let ctrl = self
+                .button_pressed(KeyButMask::CONTROL)
+                .unwrap_or_else(|_| false);
+            match event {
+                Event::ConfigureNotify(e) => {
+                    if ctrl {
+                        if !is_showing {
                             is_showing = true;
-                            win = Some(e.window);
-                            self.set_window_hack(win);
-                            self.find_active_zone(e.x, e.y);
+                            self.show();
                         }
+                        win = Some(e.window);
+                        self.find_active_zone(e.x, e.y);
                     }
-                    Event::XinputRawKeyRelease(e) => {
-                        if e.detail == 37 && is_showing {
-                            println!("ctrl res");
-                            is_showing = false;
-                        }
+                }
+                Event::XinputRawKeyRelease(e) => {
+                    if e.detail == 37 && is_showing {
+                        is_showing = false;
+                        self.hide();
                     }
-                    Event::XinputRawButtonRelease(e) => {
-                        if e.detail == 1 {
-                            if is_showing && ctrl {
+                }
+                Event::XinputRawButtonRelease(e) => {
+                    if e.detail == 1 {
+                        if is_showing {
+                            if ctrl {
                                 if let Some(active_win) = win {
-                                    // self.snap_to_zone(active_win);
+                                    self.snap_to_zone(active_win);
                                     win = None;
-                                    self.set_window_hack(win);
                                 } else {
                                     println!("Got no win outer");
                                 }
-                                is_showing = false;
                             }
+                            is_showing = false;
+                            self.hide();
                         }
                     }
-                    _ => {}
                 }
-                event_op = conn.poll_for_event()?;
-            }
-            if last_is_showing != is_showing {
-                if is_showing {
-                    self.show();
-                } else {
-                    self.hide();
-                }
-            }
-            if is_showing {
-                self.update();
+                _ => {}
             }
         }
     }
 
-    fn set_window_hack(&mut self, win: Option<u32>) {
-        for ow in &mut self.windows {
-            ow.win_hack = win;
-        }
-    }
-
-    pub fn snap_to_zone(&mut self, win: u32) {
-        println!("Snap");
+    fn snap_to_zone(&mut self, win: u32) {
         for ow in &mut self.windows {
             ow.snap_to_zone(win).unwrap();
         }
@@ -752,27 +612,20 @@ impl<'a, C: Connection> Overlay<'a, C> {
         }
     }
 
-    pub fn update(&mut self) {
-        for win in &mut self.windows {
-            win.update().unwrap();
-        }
-        self.conn.flush().unwrap();
-    }
-
-    pub fn find_active_zone(&mut self, x: i16, y: i16) {
+    fn find_active_zone(&mut self, x: i16, y: i16) {
         for ref mut win in &mut self.windows {
             win.find_active_zone(x, y);
         }
     }
 
-    pub fn show(&self) {
+    fn show(&self) {
         for win in &self.windows {
             win.show().unwrap();
         }
         self.conn.flush().unwrap();
     }
 
-    pub fn hide(&self) {
+    fn hide(&self) {
         for win in &self.windows {
             win.hide().unwrap();
         }
