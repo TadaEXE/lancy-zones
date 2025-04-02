@@ -18,6 +18,15 @@ pub struct Zone {
     pub height: i16,
 }
 
+impl Zone {
+    pub fn get_center_point(&self) -> (i16, i16) {
+        (
+            ((self.x + self.width) / 2) as i16,
+            ((self.y + self.height) / 2) as i16,
+        )
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub monitor_configs: Vec<MonitorConfig>,

@@ -8,8 +8,6 @@ use x11rb::errors::ReplyOrIdError;
 use x11rb::protocol::randr;
 use x11rb::protocol::xproto::*;
 
-use crate::config::Zone;
-
 pub fn scan_windows<C: Connection>(
     con: &C,
     screen: &Screen,
@@ -49,6 +47,26 @@ pub struct Monitor {
     pub y: i16,
     pub width: u16,
     pub height: u16,
+}
+
+impl Monitor {
+    pub fn coords_inside(&self, x: i16, y: i16) -> bool {
+        let val = x >= self.x
+            && x <= self.x + self.width as i16
+            && y >= self.y
+            && y <= self.y + self.height as i16;
+
+        // println!(
+        //     "Checking if x{} y{} inside x{} y{} w{} h{} => {}",
+        //     x, y, self.x, self.y, self.width, self.height, val
+        // );
+
+        val
+    }
+
+    pub fn to_local_space(&self, x: i16, y: i16) -> (i16, i16) {
+        (x - self.x, y - self.y)
+    }
 }
 
 pub fn get_monitors<C: Connection>(

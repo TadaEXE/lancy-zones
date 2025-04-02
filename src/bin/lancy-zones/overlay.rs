@@ -363,27 +363,61 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
     }
 
     pub fn find_active_zone(&mut self, x: i16, y: i16) {
-        let mut i = 0;
-        for zone in self.zones {
-            if x >= zone.x + self.monitor.x
-                && x <= zone.x + zone.width + self.monitor.x
-                && y >= zone.y + self.monitor.y
-                && y <= zone.y + zone.height + self.monitor.y
-            {
-                self.active_zone = Some(i);
-                self.shape_window().unwrap();
-                self.draw_zones(
-                    self.win_id,
-                    self.colors.as_ref().unwrap().white.gcontext(),
-                    self.colors.as_ref().unwrap().black.gcontext(),
-                )
-                .unwrap();
+        let (local_x, local_y) = self.monitor.to_local_space(x, y);
+        if self.monitor.coords_inside(x, y) {
+            self.active_zone = self.get_closest_center(local_x, local_y);
+        } else {
+            self.active_zone = None;
+        }
+        self.shape_window().unwrap();
+        self.draw_zones(
+            self.win_id,
+            self.colors.as_ref().unwrap().white.gcontext(),
+            self.colors.as_ref().unwrap().black.gcontext(),
+        )
+        .unwrap();
+        self.draw_snap_direction_indicator(
+            local_x,
+            local_y,
+            self.colors.as_ref().unwrap().black.gcontext(),
+        )
+        .unwrap();
+    }
 
-                return;
+    fn draw_snap_direction_indicator(
+        &self,
+        x: i16,
+        y: i16,
+        gc: Gcontext,
+    ) -> Result<(), ReplyOrIdError> {
+        if let Some(active_zone) = self.active_zone {
+            let active_zone = &self.zones[active_zone];
+            let p_cursor = Point { x, y };
+            let (cx, cy) = active_zone.get_center_point();
+            let p_center = Point { x: cx, y: cy };
+            self.conn
+                .poly_line(CoordMode::ORIGIN, self.win_id, gc, &[p_center, p_cursor])?;
+        }
+        Ok(())
+    }
+
+    fn get_closest_center(&self, x: i16, y: i16) -> Option<usize> {
+        let mut len = f64::MAX;
+        let mut i: usize = 0;
+        let mut res = None;
+        for zone in self.zones {
+            let (cx, cy) = zone.get_center_point();
+            let cur_len = f64::sqrt(
+                f64::try_from(((x - cx) as i32).pow(2) + ((y - cy) as i32).pow(2)).unwrap(),
+            );
+            if cur_len < len {
+                len = cur_len;
+                res = Some(i);
             }
             i += 1;
         }
-        self.active_zone = None;
+
+        res
     }
 
     fn move_window_to_monitor(&self) -> Result<(), ReplyOrIdError> {
