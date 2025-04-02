@@ -376,12 +376,12 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             self.colors.as_ref().unwrap().black.gcontext(),
         )
         .unwrap();
-        self.draw_snap_direction_indicator(
-            local_x,
-            local_y,
-            self.colors.as_ref().unwrap().black.gcontext(),
-        )
-        .unwrap();
+        // self.draw_snap_direction_indicator(
+        //     local_x,
+        //     local_y,
+        //     self.colors.as_ref().unwrap().black.gcontext(),
+        // )
+        // .unwrap();
     }
 
     fn draw_snap_direction_indicator(
@@ -593,7 +593,7 @@ impl<'a, C: Connection> Overlay<'a, C> {
             let event = self.conn.wait_for_event()?;
             let ctrl = self
                 .button_pressed(KeyButMask::CONTROL)
-                .unwrap_or_else(|_| false);
+                .unwrap_or(false);
             match event {
                 Event::ConfigureNotify(e) => {
                     if ctrl {
