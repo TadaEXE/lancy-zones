@@ -1,10 +1,9 @@
-use std::{rc::Rc, thread::sleep, time::Duration};
+use std::rc::Rc;
 
 use x11rb::{
     COPY_DEPTH_FROM_PARENT,
     connection::Connection,
     errors::ReplyOrIdError,
-    properties::{WmSizeHints, WmSizeHintsSpecification},
     protocol::{
         Event,
         shape::{self, ConnectionExt as _},
@@ -16,123 +15,30 @@ use x11rb::{
 };
 
 use crate::{
+    atoms::AtomContainer,
+    colors::Colors,
     config::{Config, Zone},
-    util::Monitor,
 };
 
-pub struct AtomContainer {
-    pub wm_protocols: u32,
-    pub wm_delete_window: u32,
-    pub net_wm_state: u32,
-    pub net_wm_state_above: u32,
-    pub motif_wm_hints: u32,
-    pub wm_window_opacity: u32,
-    pub wm_type: u32,
-    pub wm_type_notification: u32,
-    pub net_extents: u32,
-    pub gtk_extents: u32,
-    pub no_decorations_hint: [u32; 5],
-}
-
-impl AtomContainer {
-    pub const NO_DECORATIONS_HINT: [u32; 5] = [2, 0, 0, 0, 0];
-
-    pub fn new<'a, C: Connection + 'a>(conn: &'a C) -> Result<Self, ReplyOrIdError> {
-        let wm_protocols = conn.intern_atom(false, b"WM_PROTOCOLS")?.reply()?.atom;
-        let wm_delete_window = conn.intern_atom(false, b"WM_DELETE_WINDOW")?.reply()?.atom;
-        let net_wm_state = conn.intern_atom(false, b"_NET_WM_STATE")?.reply()?.atom;
-        let net_wm_state_above = conn
-            .intern_atom(false, b"_NET_WM_STATE_ABOVE")?
-            .reply()?
-            .atom;
-        let motif_wm_hints = conn.intern_atom(false, b"_MOTIF_WM_HINTS")?.reply()?.atom;
-        let wm_window_opacity = conn
-            .intern_atom(false, b"_NET_WM_WINDOW_OPACITY")?
-            .reply()?
-            .atom;
-        let wm_type = conn.intern_atom(false, b"_NET_WM_TYPE")?.reply()?.atom;
-        let wm_type_notification = conn
-            .intern_atom(false, b"_NET_WM_WINDOW_TYPE_NOTIFICATION")?
-            .reply()?
-            .atom;
-        let net_extents = conn
-            .intern_atom(false, b"_NET_FRAME_EXTENTS")?
-            .reply()?
-            .atom;
-        let gtk_extents = conn
-            .intern_atom(false, b"_GTK_FRAME_EXTENTS")?
-            .reply()?
-            .atom;
-
-        Ok(Self {
-            wm_protocols,
-            wm_delete_window,
-            net_wm_state,
-            net_wm_state_above,
-            motif_wm_hints,
-            wm_window_opacity,
-            no_decorations_hint: Self::NO_DECORATIONS_HINT,
-            wm_type,
-            wm_type_notification,
-            net_extents,
-            gtk_extents,
-        })
-    }
-}
-
-pub struct Colors<C: Connection> {
-    white: GcontextWrapper<Rc<C>>,
-    black: GcontextWrapper<Rc<C>>,
-}
-
-impl<C: Connection> Colors<C> {
-    pub fn new(conn: Rc<C>, win_id: Window, screen: &Screen) -> Result<Self, ReplyOrIdError> {
-        let white_gcw = GcontextWrapper::create_gc(
-            conn.clone(),
-            win_id,
-            &CreateGCAux::new()
-                .graphics_exposures(0)
-                .foreground(screen.white_pixel),
-        )?;
-        let black_gcw = GcontextWrapper::create_gc(
-            conn.clone(),
-            win_id,
-            &CreateGCAux::new()
-                .graphics_exposures(0)
-                .foreground(screen.black_pixel),
-        )?;
-
-        Ok(Colors {
-            white: white_gcw,
-            black: black_gcw,
-        })
-    }
-}
-
-struct OverlayWindow<'a, C: Connection> {
+pub struct Overlay<C: Connection> {
     conn: Rc<C>,
     screen: Rc<Screen>,
-    monitor: &'a Monitor,
-    zones: &'a [Zone],
-    pixmap: Option<PixmapWrapper<Rc<C>>>,
-    alpha: f32,
-    win_id: Window,
+    zones: Vec<Zone>,
     atoms: Rc<AtomContainer>,
     colors: Option<Colors<C>>,
+    config: Rc<Config>,
+    win_id: Window,
     active_zone: Option<usize>,
-    line_thickness: u16,
+    pixmap: Option<PixmapWrapper<Rc<C>>>,
 }
 
-impl<'a, C: Connection> OverlayWindow<'a, C> {
+impl<C: Connection> Overlay<C> {
     pub fn new(
         conn: Rc<C>,
         screen: Rc<Screen>,
-        monitor: &'a Monitor,
-        zones: &'a [Zone],
         atoms: Rc<AtomContainer>,
-        alpha: f32,
-        line_thickness: u16,
-    ) -> Result<Self, ReplyOrIdError> {
+        config: Rc<Config>,
+    ) -> Self {
         assert!(
             conn.extension_information(shape::X11_EXTENSION_NAME)
                 .unwrap()
@@ -146,64 +52,47 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             "XInput extension is required."
         );
 
-        for zone in zones {
-            assert!(
-                zone.x < monitor.width.try_into().unwrap()
-                    && zone.y < monitor.height.try_into().unwrap(),
-                "Zone {} starts out of bounds at (x: {}, y: {}) for monitor {} {}x{}",
-                zone.id,
-                zone.x,
-                zone.y,
-                monitor.name,
-                monitor.width,
-                monitor.height
-            );
-            assert!(
-                zone.x + zone.width <= monitor.width.try_into().unwrap()
-                    && zone.y + zone.height <= monitor.height.try_into().unwrap(),
-                "Zone {} ends out of bounds at (x: {}, y: {}) for monitor {} {}x{}",
-                zone.id,
-                zone.x + zone.width,
-                zone.y + zone.height,
-                monitor.name,
-                monitor.width,
-                monitor.height
-            );
+        let mut zones = Vec::new();
+        for mc in &config.monitor_configs {
+            for zone in &mc.zones {
+                let trans_zone = Zone {
+                    id: zone.id,
+                    x: zone.x + mc.monitor.x,
+                    y: zone.y + mc.monitor.y,
+                    width: zone.width,
+                    height: zone.height,
+                };
+                zones.push(trans_zone);
+            }
         }
 
-        let win_id = conn.generate_id()?;
+        let win_id = conn.generate_id().expect("Failed to generate window id.");
 
-        let alpha = alpha.clamp(0.0, 1.0);
-
-        dbg!(monitor);
-
-        Ok(OverlayWindow {
+        Overlay {
             conn,
             screen,
-            monitor,
-            zones: &zones,
-            pixmap: None,
-            alpha,
-            win_id,
+            zones,
             atoms,
             colors: None,
+            config,
+            win_id,
             active_zone: None,
-            line_thickness,
-        })
+            pixmap: None,
+        }
     }
 
-    pub fn setup_window(mut self) -> Result<Self, ReplyOrIdError> {
+    pub fn init(mut self) -> Result<Self, ReplyOrIdError> {
         let win_aux = CreateWindowAux::new()
             .event_mask(EventMask::EXPOSURE | EventMask::STRUCTURE_NOTIFY)
             .background_pixel(self.screen.white_pixel)
             .override_redirect(1);
-        let opacity: u32 = (self.alpha * u32::MAX as f32) as u32;
+        let opacity: u32 = (self.config.alpha * u32::MAX as f32) as u32;
         let wm_normal_hints = [
-            15,                         // Flags: PMinSize | PMaxSize
-            self.monitor.width as u32,  // min width
-            self.monitor.height as u32, // min height
-            self.monitor.width as u32,  // max width
-            self.monitor.height as u32, // max height
+            15,                                  // Flags: PMinSize | PMaxSize
+            self.screen.width_in_pixels as u32,  // min width
+            self.screen.height_in_pixels as u32, // min height
+            self.screen.width_in_pixels as u32,  // max width
+            self.screen.height_in_pixels as u32, // max height
             0,
             0,
             0,
@@ -215,10 +104,10 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             COPY_DEPTH_FROM_PARENT,
             self.win_id,
             self.screen.root,
-            self.monitor.x,
-            self.monitor.y,
-            self.monitor.width,
-            self.monitor.height,
+            0,
+            0,
+            self.screen.width_in_pixels,
+            self.screen.height_in_pixels,
             0,
             WindowClass::INPUT_OUTPUT,
             0,
@@ -286,8 +175,8 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             self.conn.clone(),
             self.screen.root_depth,
             self.win_id,
-            self.monitor.width,
-            self.monitor.height,
+            self.screen.width_in_pixels,
+            self.screen.height_in_pixels,
         )?);
 
         self.conn.shape_mask(
@@ -306,12 +195,91 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         Ok(self)
     }
 
-    pub fn snap_to_zone(&mut self, win: u32) -> Result<(), ReplyOrIdError> {
+    pub fn listen(&mut self) -> Result<(), ReplyOrIdError> {
+        self.conn.change_window_attributes(
+            self.screen.root,
+            &ChangeWindowAttributesAux::new()
+                .event_mask(EventMask::SUBSTRUCTURE_NOTIFY | EventMask::STRUCTURE_NOTIFY),
+        )?;
+        self.conn.xinput_xi_select_events(
+            self.screen.root,
+            &[xinput::EventMask {
+                deviceid: Device::ALL.into(),
+                mask: vec![XIEventMask::RAW_KEY_RELEASE | XIEventMask::RAW_BUTTON_RELEASE],
+            }],
+        )?;
+        self.conn.flush()?;
+
+        let mut is_showing = false;
+        let mut win: Option<u32> = None;
+        loop {
+            let event = self.conn.wait_for_event()?;
+            let ctrl = self.button_pressed(KeyButMask::CONTROL).unwrap_or(false);
+            match event {
+                Event::ConfigureNotify(e) => {
+                    if ctrl {
+                        if !is_showing {
+                            is_showing = true;
+                            self.show()?;
+                        }
+                        win = Some(e.window);
+                        self.find_active_zone(e.x, e.y);
+                    }
+                }
+                Event::XinputRawKeyRelease(e) => {
+                    if e.detail == 37 && is_showing {
+                        is_showing = false;
+                        self.hide()?;
+                    }
+                }
+                Event::XinputRawButtonRelease(e) => {
+                    if e.detail == 1 {
+                        if is_showing {
+                            if ctrl {
+                                if let Some(active_win) = win {
+                                    self.snap_to_zone(active_win)?;
+                                    win = None;
+                                } else {
+                                    println!("Got no win outer");
+                                }
+                            }
+                            is_showing = false;
+                            self.hide()?;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn button_pressed(&self, but: KeyButMask) -> Result<bool, ReplyOrIdError> {
+        if let Ok(reply) = self.conn.query_pointer(self.screen.root)?.reply() {
+            Ok(reply.mask & but != KeyButMask::from(0_u16))
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn show(&self) -> Result<(), ReplyOrIdError> {
+        self.conn.map_window(self.win_id)?;
+        // self.move_window_to_monitor()?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    fn hide(&self) -> Result<(), ReplyOrIdError> {
+        self.conn.unmap_window(self.win_id)?;
+        self.conn.flush()?;
+        Ok(())
+    }
+
+    fn snap_to_zone(&mut self, win: u32) -> Result<(), ReplyOrIdError> {
         if let Some(zone) = self.active_zone {
             let zone = &self.zones[zone];
             let conf = ConfigureWindowAux::new()
-                .x(i32::from(zone.x + self.monitor.x))
-                .y(i32::from(zone.y + self.monitor.y))
+                .x(i32::from(zone.x))
+                .y(i32::from(zone.y))
                 .width(u32::try_from(zone.width).unwrap())
                 .height(u32::try_from(zone.height).unwrap())
                 .stack_mode(StackMode::ABOVE);
@@ -322,7 +290,7 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
                 win,
                 &ChangeWindowAttributesAux::new().win_gravity(Gravity::NORTH_WEST),
             )?;
-            println!("Snapping to {:?} on monitor {:?}", zone, self.monitor);
+            println!("Snapping to {:?}", zone);
             self.conn.configure_window(win, &conf)?;
             self.conn.flush()?;
             self.active_zone = None;
@@ -349,27 +317,30 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         Ok(())
     }
 
-    pub fn show(&self) -> Result<(), ReplyOrIdError> {
-        self.conn.map_window(self.win_id)?;
-        self.move_window_to_monitor()?;
-        self.conn.flush()?;
-        Ok(())
-    }
+    fn find_active_zone(&mut self, x: i16, y: i16) {
+        let mut dist_sqr_min = u32::MAX;
 
-    pub fn hide(&self) -> Result<(), ReplyOrIdError> {
-        self.conn.unmap_window(self.win_id)?;
-        self.conn.flush()?;
-        Ok(())
-    }
-
-    pub fn find_active_zone(&mut self, x: i16, y: i16) {
-        let (local_x, local_y) = self.monitor.to_local_space(x, y);
-        if self.monitor.coords_inside(x, y) {
-            self.active_zone = self.get_closest_center(local_x, local_y);
-        } else {
-            self.active_zone = None;
+        for i in 0..self.zones.len() {
+            if self.zones[i].is_inside(x, y) {
+                let dist_sqr = self.zones[i].get_sqr_dist_to(x, y);
+                println!(
+                    "zone {:?} has dist {} with x{} y{}",
+                    self.zones[i], dist_sqr, x, y
+                );
+                if dist_sqr < dist_sqr_min {
+                    self.active_zone = Some(i);
+                    dist_sqr_min = dist_sqr;
+                }
+            }
         }
-        self.shape_window().unwrap();
+        if let Some(az) = self.active_zone {
+            println!(
+                "new active zone {:?}, with dist {}",
+                self.zones[az], dist_sqr_min
+            );
+        }
+
+        // self.shape_window().unwrap(); // shape window is expensive!!!!
         self.draw_zones(
             self.win_id,
             self.colors.as_ref().unwrap().white.gcontext(),
@@ -405,7 +376,7 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         let mut len = f64::MAX;
         let mut i: usize = 0;
         let mut res = None;
-        for zone in self.zones {
+        for zone in &self.zones {
             let (cx, cy) = zone.get_center_point();
             let cur_len = f64::sqrt(
                 f64::try_from(((x - cx) as i32).pow(2) + ((y - cy) as i32).pow(2)).unwrap(),
@@ -420,42 +391,34 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         res
     }
 
-    fn move_window_to_monitor(&self) -> Result<(), ReplyOrIdError> {
-        let config_aux = ConfigureWindowAux::new()
-            .x(self.monitor.x as i32)
-            .y(self.monitor.y as i32);
-        self.conn.configure_window(self.win_id, &config_aux)?;
-        Ok(())
-    }
-
     fn draw_zones(&self, win_id: Window, c1: Gcontext, c2: Gcontext) -> Result<(), ReplyOrIdError> {
-        for zone in self.zones {
+        for zone in &self.zones {
             let top = Rectangle {
                 x: zone.x,
                 y: zone.y,
                 width: zone.width as u16,
-                height: self.line_thickness,
+                height: self.config.line_thickness,
             };
 
             let left = Rectangle {
                 x: zone.x,
                 y: zone.y,
-                width: self.line_thickness,
+                width: self.config.line_thickness,
                 height: zone.height as u16,
             };
 
             let right = Rectangle {
-                x: zone.x + zone.width - self.line_thickness as i16,
+                x: zone.x + zone.width - self.config.line_thickness as i16,
                 y: zone.y,
-                width: self.line_thickness,
+                width: self.config.line_thickness,
                 height: zone.height as u16,
             };
 
             let bottom = Rectangle {
                 x: zone.x,
-                y: zone.y + zone.height - self.line_thickness as i16,
+                y: zone.y + zone.height - self.config.line_thickness as i16,
                 width: zone.width as u16,
-                height: self.line_thickness,
+                height: self.config.line_thickness,
             };
 
             let bg = Rectangle {
@@ -498,8 +461,8 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
             self.conn.clone(),
             1,
             self.win_id,
-            self.monitor.width,
-            self.monitor.height,
+            self.screen.width_in_pixels,
+            self.screen.height_in_pixels,
         )?;
         // Make transparent
         let gc = GcontextWrapper::create_gc(
@@ -510,8 +473,8 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         let rect = Rectangle {
             x: 0,
             y: 0,
-            width: self.monitor.width as u16,
-            height: self.monitor.height as u16,
+            width: self.screen.width_in_pixels,
+            height: self.screen.height_in_pixels,
         };
 
         self.conn
@@ -532,137 +495,5 @@ impl<'a, C: Connection> OverlayWindow<'a, C> {
         )?;
 
         Ok(())
-    }
-}
-
-pub struct Overlay<'a, C: Connection> {
-    conn: Rc<C>,
-    windows: Vec<OverlayWindow<'a, C>>,
-    screen: Rc<Screen>,
-}
-
-impl<'a, C: Connection> Overlay<'a, C> {
-    pub fn new(
-        conn: Rc<C>,
-        config: &'a Config,
-        screen: Rc<Screen>,
-        atom_container: Rc<AtomContainer>,
-    ) -> Self {
-        let mut windows = Vec::new();
-
-        for mc in &config.monitor_configs {
-            let window = OverlayWindow::new(
-                conn.clone(),
-                screen.clone(),
-                &mc.monitor,
-                &mc.zones,
-                atom_container.clone(),
-                0.5,
-                2,
-            )
-            .unwrap()
-            .setup_window()
-            .unwrap();
-            windows.push(window);
-        }
-        Overlay {
-            conn,
-            windows,
-            screen,
-        }
-    }
-
-    pub fn listen(&mut self) -> Result<(), ReplyOrIdError> {
-        self.conn.change_window_attributes(
-            self.screen.root,
-            &ChangeWindowAttributesAux::new()
-                .event_mask(EventMask::SUBSTRUCTURE_NOTIFY | EventMask::STRUCTURE_NOTIFY),
-        )?;
-        self.conn.xinput_xi_select_events(
-            self.screen.root,
-            &[xinput::EventMask {
-                deviceid: Device::ALL.into(),
-                mask: vec![XIEventMask::RAW_KEY_RELEASE | XIEventMask::RAW_BUTTON_RELEASE],
-            }],
-        )?;
-        self.conn.flush()?;
-
-        let mut is_showing = false;
-        let mut win: Option<u32> = None;
-        loop {
-            let event = self.conn.wait_for_event()?;
-            let ctrl = self
-                .button_pressed(KeyButMask::CONTROL)
-                .unwrap_or(false);
-            match event {
-                Event::ConfigureNotify(e) => {
-                    if ctrl {
-                        if !is_showing {
-                            is_showing = true;
-                            self.show();
-                        }
-                        win = Some(e.window);
-                        self.find_active_zone(e.x, e.y);
-                    }
-                }
-                Event::XinputRawKeyRelease(e) => {
-                    if e.detail == 37 && is_showing {
-                        is_showing = false;
-                        self.hide();
-                    }
-                }
-                Event::XinputRawButtonRelease(e) => {
-                    if e.detail == 1 {
-                        if is_showing {
-                            if ctrl {
-                                if let Some(active_win) = win {
-                                    self.snap_to_zone(active_win);
-                                    win = None;
-                                } else {
-                                    println!("Got no win outer");
-                                }
-                            }
-                            is_showing = false;
-                            self.hide();
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-
-    fn snap_to_zone(&mut self, win: u32) {
-        for ow in &mut self.windows {
-            ow.snap_to_zone(win).unwrap();
-        }
-    }
-
-    fn button_pressed(&self, but: KeyButMask) -> Result<bool, ReplyOrIdError> {
-        if let Ok(reply) = self.conn.query_pointer(self.screen.root)?.reply() {
-            Ok(reply.mask & but != KeyButMask::from(0_u16))
-        } else {
-            Ok(false)
-        }
-    }
-
-    fn find_active_zone(&mut self, x: i16, y: i16) {
-        for ref mut win in &mut self.windows {
-            win.find_active_zone(x, y);
-        }
-    }
-
-    fn show(&self) {
-        for win in &self.windows {
-            win.show().unwrap();
-        }
-        self.conn.flush().unwrap();
-    }
-
-    fn hide(&self) {
-        for win in &self.windows {
-            win.hide().unwrap();
-        }
-        self.conn.flush().unwrap();
     }
 }

@@ -12,6 +12,8 @@ use crate::util::{self, Monitor};
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub monitor_configs: Vec<MonitorConfig>,
+    pub alpha: f32,
+    pub line_thickness: u16,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -32,10 +34,24 @@ pub struct Zone {
 
 impl Zone {
     pub fn get_center_point(&self) -> (i16, i16) {
+        println!("({} + {}) / 2 = {}", self.x, self.width, ((self.x + self.width) / 2) as i16);
+        println!("({} + {}) / 2 = {}", self.y, self.height, ((self.y + self.height) / 2) as i16);
         (
-            ((self.x + self.width) / 2) as i16,
-            ((self.y + self.height) / 2) as i16,
+            (self.width / 2 + self.x) as i16,
+            (self.height / 2 + self.y) as i16,
         )
+    }
+
+    pub fn is_inside(&self, x: i16, y: i16) -> bool {
+        true
+    }
+
+    pub fn get_sqr_dist_to(&self, x: i16, y: i16) -> u32 {
+        let cp = self.get_center_point();
+        // println!("{:?}", cp);
+        (((x - cp.0) as i32).pow(2) + ((y - cp.1) as i32).pow(2))
+            .try_into()
+            .expect("Failed to calculate square distance")
     }
 }
 
@@ -58,7 +74,11 @@ pub fn init_cfg_file<C: Connection>(path: &Path, conn: &C, root: u32) {
         });
     }
 
-    let config = Config { monitor_configs };
+    let config = Config {
+        monitor_configs,
+        alpha: 0.5,
+        line_thickness: 3,
+    };
     let dir = path.parent().unwrap_or(Path::new("/"));
     fs::create_dir_all(&dir).expect(&format!("Failed to create dir at {:#?}", dir));
     let mut cfg_file = File::create(path).expect(&format!(

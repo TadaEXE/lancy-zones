@@ -1,4 +1,5 @@
 use std::error::Error;
+use std::fmt::Display;
 use std::str;
 
 use serde::Deserialize;
@@ -47,6 +48,12 @@ pub struct Monitor {
     pub y: i16,
     pub width: u16,
     pub height: u16,
+}
+
+impl Display for Monitor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} at x: {} y: {} => {}x{}", self.name, self.x, self.y, self.width, self.height)
+    }
 }
 
 impl Monitor {
