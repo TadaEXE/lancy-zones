@@ -34,8 +34,6 @@ pub struct Zone {
 
 impl Zone {
     pub fn get_center_point(&self) -> (i16, i16) {
-        println!("({} + {}) / 2 = {}", self.x, self.width, ((self.x + self.width) / 2) as i16);
-        println!("({} + {}) / 2 = {}", self.y, self.height, ((self.y + self.height) / 2) as i16);
         (
             (self.width / 2 + self.x) as i16,
             (self.height / 2 + self.y) as i16,
@@ -48,7 +46,6 @@ impl Zone {
 
     pub fn get_sqr_dist_to(&self, x: i16, y: i16) -> u32 {
         let cp = self.get_center_point();
-        // println!("{:?}", cp);
         (((x - cp.0) as i32).pow(2) + ((y - cp.1) as i32).pow(2))
             .try_into()
             .expect("Failed to calculate square distance")

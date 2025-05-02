@@ -14,11 +14,9 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use crate::{
-    atoms::AtomContainer,
-    colors::Colors,
-    config::{Config, Zone},
-};
+use crate::{atoms::AtomContainer, colors::Colors};
+
+use lancy_zones::config::{Config, Zone};
 
 pub struct Overlay<C: Connection> {
     conn: Rc<C>,
@@ -290,7 +288,6 @@ impl<C: Connection> Overlay<C> {
                 win,
                 &ChangeWindowAttributesAux::new().win_gravity(Gravity::NORTH_WEST),
             )?;
-            println!("Snapping to {:?}", zone);
             self.conn.configure_window(win, &conf)?;
             self.conn.flush()?;
             self.active_zone = None;
@@ -323,72 +320,19 @@ impl<C: Connection> Overlay<C> {
         for i in 0..self.zones.len() {
             if self.zones[i].is_inside(x, y) {
                 let dist_sqr = self.zones[i].get_sqr_dist_to(x, y);
-                println!(
-                    "zone {:?} has dist {} with x{} y{}",
-                    self.zones[i], dist_sqr, x, y
-                );
                 if dist_sqr < dist_sqr_min {
                     self.active_zone = Some(i);
                     dist_sqr_min = dist_sqr;
                 }
             }
         }
-        if let Some(az) = self.active_zone {
-            println!(
-                "new active zone {:?}, with dist {}",
-                self.zones[az], dist_sqr_min
-            );
-        }
 
-        // self.shape_window().unwrap(); // shape window is expensive!!!!
         self.draw_zones(
             self.win_id,
             self.colors.as_ref().unwrap().white.gcontext(),
             self.colors.as_ref().unwrap().black.gcontext(),
         )
         .unwrap();
-        // self.draw_snap_direction_indicator(
-        //     local_x,
-        //     local_y,
-        //     self.colors.as_ref().unwrap().black.gcontext(),
-        // )
-        // .unwrap();
-    }
-
-    fn draw_snap_direction_indicator(
-        &self,
-        x: i16,
-        y: i16,
-        gc: Gcontext,
-    ) -> Result<(), ReplyOrIdError> {
-        if let Some(active_zone) = self.active_zone {
-            let active_zone = &self.zones[active_zone];
-            let p_cursor = Point { x, y };
-            let (cx, cy) = active_zone.get_center_point();
-            let p_center = Point { x: cx, y: cy };
-            self.conn
-                .poly_line(CoordMode::ORIGIN, self.win_id, gc, &[p_center, p_cursor])?;
-        }
-        Ok(())
-    }
-
-    fn get_closest_center(&self, x: i16, y: i16) -> Option<usize> {
-        let mut len = f64::MAX;
-        let mut i: usize = 0;
-        let mut res = None;
-        for zone in &self.zones {
-            let (cx, cy) = zone.get_center_point();
-            let cur_len = f64::sqrt(
-                f64::try_from(((x - cx) as i32).pow(2) + ((y - cy) as i32).pow(2)).unwrap(),
-            );
-            if cur_len < len {
-                len = cur_len;
-                res = Some(i);
-            }
-            i += 1;
-        }
-
-        res
     }
 
     fn draw_zones(&self, win_id: Window, c1: Gcontext, c2: Gcontext) -> Result<(), ReplyOrIdError> {
@@ -453,47 +397,6 @@ impl<C: Connection> Overlay<C> {
             self.conn
                 .poly_fill_rectangle(self.win_id, colors.white.gcontext(), &[rect])?;
         }
-        Ok(())
-    }
-
-    fn shape_window(&self) -> Result<(), ReplyOrIdError> {
-        let pixmap = PixmapWrapper::create_pixmap(
-            self.conn.clone(),
-            1,
-            self.win_id,
-            self.screen.width_in_pixels,
-            self.screen.height_in_pixels,
-        )?;
-        // Make transparent
-        let gc = GcontextWrapper::create_gc(
-            self.conn.clone(),
-            pixmap.pixmap(),
-            &CreateGCAux::new().graphics_exposures(0).foreground(0),
-        )?;
-        let rect = Rectangle {
-            x: 0,
-            y: 0,
-            width: self.screen.width_in_pixels,
-            height: self.screen.height_in_pixels,
-        };
-
-        self.conn
-            .poly_fill_rectangle(pixmap.pixmap(), gc.gcontext(), &[rect])?;
-
-        let values = ChangeGCAux::new().foreground(1);
-
-        self.conn.change_gc(gc.gcontext(), &values)?;
-        self.draw_zones(pixmap.pixmap(), gc.gcontext(), gc.gcontext())?;
-
-        self.conn.shape_mask(
-            shape::SO::SET,
-            shape::SK::BOUNDING,
-            self.win_id,
-            0,
-            0,
-            &pixmap,
-        )?;
-
         Ok(())
     }
 }
