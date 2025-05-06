@@ -1,3 +1,4 @@
+use core::fmt;
 use std::{
     fs::{self, File, read},
     io::Write,
@@ -16,11 +17,27 @@ pub struct Config {
     pub line_thickness: u16,
 }
 
+impl fmt::Display for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{:#?} [{}; {}]",
+            self.monitor_configs, self.alpha, self.line_thickness
+        )
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct MonitorConfig {
     pub name: String,
     pub zones: Vec<Zone>,
     pub monitor: Monitor,
+}
+
+impl fmt::Display for MonitorConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: [{:#?}] ({})", self.name, self.zones, self.monitor)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -30,6 +47,16 @@ pub struct Zone {
     pub y: i16,
     pub width: i16,
     pub height: i16,
+}
+
+impl fmt::Display for Zone {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} at x: {} y: {} => {}x{}",
+            self.id, self.x, self.y, self.width, self.height
+        )
+    }
 }
 
 impl Zone {

@@ -1,4 +1,3 @@
-use std::error::Error;
 use std::fmt::Display;
 use std::str;
 
@@ -52,7 +51,11 @@ pub struct Monitor {
 
 impl Display for Monitor {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} at x: {} y: {} => {}x{}", self.name, self.x, self.y, self.width, self.height)
+        write!(
+            f,
+            "{} at x: {} y: {} => {}x{}",
+            self.name, self.x, self.y, self.width, self.height
+        )
     }
 }
 
@@ -62,12 +65,6 @@ impl Monitor {
             && x <= self.x + self.width as i16
             && y >= self.y
             && y <= self.y + self.height as i16;
-
-        // println!(
-        //     "Checking if x{} y{} inside x{} y{} w{} h{} => {}",
-        //     x, y, self.x, self.y, self.width, self.height, val
-        // );
-
         val
     }
 
