@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::fmt::Display;
 use std::str;
 
@@ -7,6 +8,8 @@ use x11rb::connection::Connection;
 use x11rb::errors::ReplyOrIdError;
 use x11rb::protocol::randr;
 use x11rb::protocol::xproto::*;
+
+use crate::config::Zone;
 
 pub fn scan_windows<C: Connection>(
     con: &C,

@@ -2,6 +2,7 @@ use core::fmt;
 use std::{
     fs::{self, File, read},
     io::Write,
+    ops::DerefMut,
     path::Path,
 };
 
@@ -17,11 +18,19 @@ pub struct Config {
     pub line_thickness: u16,
 }
 
+impl Config {
+    pub fn get_monitor_config(&self, mc_name: &str) -> Option<&MonitorConfig> {
+        self.monitor_configs
+            .iter()
+            .find(|cfg| -> bool { cfg.name == mc_name })
+    }
+}
+
 impl fmt::Display for Config {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{:#?} [{}; {}]",
+            "{:#?} [alpha: {}; line_thickness: {}]",
             self.monitor_configs, self.alpha, self.line_thickness
         )
     }
@@ -32,21 +41,43 @@ pub struct MonitorConfig {
     pub name: String,
     pub zones: Vec<Zone>,
     pub monitor: Monitor,
+    pub active: bool,
 }
 
 impl fmt::Display for MonitorConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}: [{:#?}] ({})", self.name, self.zones, self.monitor)
     }
+
+    pub fn remove_zone(&mut self, mc_name: &str, zone_name: &str) {
+        if let Some(index) = self
+            .zones
+            .iter()
+            .position(|zone| -> bool { zone.id == zone_id })
+        {
+            monitor_cfg.zones.remove(index);
+        } else {
+            println!(
+                "Could not find Zone with id {} assigned to config {}",
+                zone_name, mc_name
+            )
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Zone {
-    pub id: u16,
+    pub name: String,
     pub x: i16,
     pub y: i16,
     pub width: i16,
     pub height: i16,
+}
+
+impl MonitorConfig {
+    pub fn add_zone(&mut self, mc_name: &str, zone: Zone) {
+        self.zones.push(zone);
+    }
 }
 
 impl fmt::Display for Zone {
@@ -54,7 +85,7 @@ impl fmt::Display for Zone {
         write!(
             f,
             "{} at x: {} y: {} => {}x{}",
-            self.id, self.x, self.y, self.width, self.height
+            self.name, self.x, self.y, self.width, self.height
         )
     }
 }
@@ -85,7 +116,7 @@ pub fn init_cfg_file<C: Connection>(path: &Path, conn: &C, root: u32) {
 
     for monitor in &monitors {
         let zones = vec![Zone {
-            id: 0,
+            name: "unnamed".to_string(),
             x: 0,
             y: 0,
             width: monitor.width.try_into().unwrap(),
@@ -95,6 +126,7 @@ pub fn init_cfg_file<C: Connection>(path: &Path, conn: &C, root: u32) {
             name: monitor.name.clone(),
             zones,
             monitor: monitor.clone(),
+            active: true,
         });
     }
 
