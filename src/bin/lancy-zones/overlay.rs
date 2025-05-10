@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{cmp::Ordering, rc::Rc};
 
 use x11rb::{
     COPY_DEPTH_FROM_PARENT,
@@ -52,6 +52,14 @@ impl<C: Connection> Overlay<C> {
 
         let mut zones = Vec::new();
         for monitor in &config.monitors {
+            // add background zone for correct rendering
+            zones.push(Zone {
+                name: "".to_string(),
+                x: monitor.x,
+                y: monitor.y,
+                width: monitor.width as i16,
+                height: monitor.height as i16,
+            });
             if let Some(config) = &monitor.config {
                 for zone in &config.zones {
                     let trans_zone = Zone {
@@ -65,6 +73,20 @@ impl<C: Connection> Overlay<C> {
                 }
             }
         }
+
+        // Sort by biggest area first (ording::less). This helps rendering of zones that cover
+        // eachother, because the common case is a zone covered by farction of itself
+        zones.sort_by(|a, b| -> Ordering {
+            let a = a.get_area();
+            let b = b.get_area();
+            if a > b {
+                Ordering::Less
+            } else if a < b {
+                Ordering::Greater
+            } else {
+                Ordering::Equal
+            }
+        });
 
         let win_id = conn.generate_id().expect("Failed to generate window id.");
 

@@ -141,7 +141,11 @@ impl Zone {
     }
 
     pub fn is_inside(&self, x: i16, y: i16) -> bool {
-        x >= self.x && x <= self.x + self.width && y >= self.y && y <= self.y + self.height
+        self.name != ""
+            && x >= self.x
+            && x <= self.x + self.width
+            && y >= self.y
+            && y <= self.y + self.height
     }
 
     pub fn get_sqr_dist_to(&self, x: i16, y: i16) -> u32 {
@@ -161,13 +165,7 @@ pub fn init_cfg_file<C: Connection>(conn: &C, root: u32) {
     let mut monitor_configs = vec![];
 
     for monitor in &mut monitors {
-        let zones = vec![Zone {
-            name: "unnamed".to_string(),
-            x: 0,
-            y: 0,
-            width: monitor.width.try_into().unwrap(),
-            height: monitor.height.try_into().unwrap(),
-        }];
+        let zones = vec![];
         let monitor_config = MonitorConfig {
             name: monitor.name.clone(),
             zones,
