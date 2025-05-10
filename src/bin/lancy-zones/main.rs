@@ -18,9 +18,9 @@ fn main() {
 
     let path = Path::new("~/.config/lancy-zones/config.json");
     if !path.exists() {
-        init_cfg_file(&path, &conn, screen.root);
+        init_cfg_file(&conn, screen.root);
     }
-    let config = Rc::new(load_cfg_file(&path));
+    let config = Rc::new(load_cfg_file());
 
     let atoms = Rc::new(AtomContainer::new(&conn).unwrap());
     let screen = Rc::new(screen);

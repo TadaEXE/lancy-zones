@@ -8,7 +8,10 @@ use lancy_zones::config;
 
 use x11rb::connection::Connection;
 
+mod cmd_impl;
 mod example;
+
+use crate::cmd_impl::*;
 
 #[derive(Debug, Parser)]
 #[command(name = "lancy-zones-cfg")]
@@ -20,57 +23,77 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Commands {
     #[command()]
-    List {},
-    #[command()]
-    Show {},
+    Info {},
     #[command()]
     Reinit {},
     #[command(arg_required_else_help = true)]
-    Add {
+    CreateConfig { config_name: String },
+    #[command(arg_required_else_help = true)]
+    RemoveConfig { config_name: String },
+    #[command(arg_required_else_help = true)]
+    Assign {
         monitor_name: String,
-        x: i16,
-        y: i16,
-        width: u16,
-        height: u16,
+        config_name: String,
     },
     #[command(arg_required_else_help = true)]
-    Remove {},
-}
-
-fn list_cmd(path: &Path) {
-    let config = config::load_cfg_file(&path);
-    println!("{}", config);
-}
-
-fn reinit_cmd(path: &Path) {
-    if path.exists() {
-        fs::remove_file(&path).expect(&std::format!(
-            "Could not delete exisiting config file at {}",
-            path.to_str().unwrap()
-        ));
-    }
-    let (conn, screen_num) = x11rb::connect(None).unwrap();
-    let screen = &conn.setup().roots[screen_num];
-    config::init_cfg_file(&path, &conn, screen.root);
+    Unassign { monitor_name: String },
+    #[command(arg_required_else_help = true)]
+    AddZone {
+        config_name: String,
+        zone_name: String,
+        x: i16,
+        y: i16,
+        width: i16,
+        height: i16,
+    },
+    // #[command(arg_required_else_help = true)]
+    // AddZoneRel {
+    //     config_name: String,
+    //     zone_name: String,
+    //     x: String,
+    //     y: String,
+    //     width: String,
+    //     height: String,
+    // },
+    #[command(arg_required_else_help = true)]
+    RemoveZone {
+        config_name: String,
+        zone_name: String,
+    },
 }
 
 fn main() {
     let args = Cli::parse();
 
-    let path = Path::new("~/.config/lancy-zones/config.json");
-
     match args.command {
-        Commands::List {} => list_cmd(path),
-        Commands::Show {} => todo!(),
-        Commands::Add {
+        Commands::Info {} => list_cmd(),
+        Commands::Reinit {} => reinit_cmd(),
+        Commands::CreateConfig { config_name } => create_config_cmd(&config_name),
+        Commands::RemoveConfig { config_name } => remove_config_cmd(&config_name),
+        Commands::AddZone {
+            config_name,
+            zone_name,
             x,
             y,
             width,
             height,
-        } => {
-            println!("{} {} {}x{}", x, y, width, height);
-        }
-        Commands::Remove {} => todo!(),
-        Commands::Reinit {} => reinit_cmd(path),
+        } => add_zone_cmd(&config_name, &zone_name, x, y, width, height),
+        // Commands::AddZoneRel {
+        //     config_name,
+        //     zone_name,
+        //     x,
+        //     y,
+        //     width,
+        //     height,
+        // } => todo!(),
+        Commands::RemoveZone {
+            config_name,
+            zone_name,
+        } => todo!(),
+        Commands::Assign {
+            monitor_name,
+            config_name,
+        } => assign_cmd(&monitor_name, &config_name),
+        Commands::Unassign { monitor_name } => unassing_cmd(&monitor_name),
     }
 }

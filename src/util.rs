@@ -9,7 +9,7 @@ use x11rb::errors::ReplyOrIdError;
 use x11rb::protocol::randr;
 use x11rb::protocol::xproto::*;
 
-use crate::config::Zone;
+use crate::config;
 
 pub fn scan_windows<C: Connection>(
     con: &C,
@@ -43,43 +43,11 @@ pub fn scan_windows<C: Connection>(
     Ok(all_windows)
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Monitor {
-    pub name: String,
-    pub x: i16,
-    pub y: i16,
-    pub width: u16,
-    pub height: u16,
-}
-
-impl Display for Monitor {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} at x: {} y: {} => {}x{}",
-            self.name, self.x, self.y, self.width, self.height
-        )
-    }
-}
-
-impl Monitor {
-    pub fn coords_inside(&self, x: i16, y: i16) -> bool {
-        let val = x >= self.x
-            && x <= self.x + self.width as i16
-            && y >= self.y
-            && y <= self.y + self.height as i16;
-        val
-    }
-
-    pub fn to_local_space(&self, x: i16, y: i16) -> (i16, i16) {
-        (x - self.x, y - self.y)
-    }
-}
 
 pub fn get_monitors<C: Connection>(
     conn: &C,
     root_window: Window,
-) -> Result<Vec<Monitor>, ReplyOrIdError> {
+) -> Result<Vec<config::Monitor>, ReplyOrIdError> {
     let mut monitors = Vec::new();
     let screen_resources = randr::get_screen_resources(conn, root_window)?.reply()?;
     for s in screen_resources.outputs {
@@ -96,8 +64,9 @@ pub fn get_monitors<C: Connection>(
                 .reply()
                 {
                     Ok(crtc_info) => {
-                        monitors.push(Monitor {
+                        monitors.push(config::Monitor {
                             name: String::from_utf8(output_info.name).unwrap(),
+                            config: None,
                             x: crtc_info.x.try_into().unwrap(),
                             y: crtc_info.y.try_into().unwrap(),
                             width: crtc_info.width,

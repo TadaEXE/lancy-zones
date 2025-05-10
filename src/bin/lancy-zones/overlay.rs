@@ -51,16 +51,18 @@ impl<C: Connection> Overlay<C> {
         );
 
         let mut zones = Vec::new();
-        for mc in &config.monitor_configs {
-            for zone in &mc.zones {
-                let trans_zone = Zone {
-                    id: zone.id,
-                    x: zone.x + mc.monitor.x,
-                    y: zone.y + mc.monitor.y,
-                    width: zone.width,
-                    height: zone.height,
-                };
-                zones.push(trans_zone);
+        for monitor in &config.monitors {
+            if let Some(config) = &monitor.config {
+                for zone in &config.zones {
+                    let trans_zone = Zone {
+                        name: zone.name.clone(),
+                        x: zone.x + monitor.x,
+                        y: zone.y + monitor.y,
+                        width: zone.width,
+                        height: zone.height,
+                    };
+                    zones.push(trans_zone);
+                }
             }
         }
 
@@ -221,7 +223,8 @@ impl<C: Connection> Overlay<C> {
                             self.show()?;
                         }
                         win = Some(e.window);
-                        self.find_active_zone(e.x, e.y);
+                        let pointer = self.conn.query_pointer(self.win_id)?.reply()?;
+                        self.find_active_zone(pointer.root_x, pointer.root_y);
                     }
                 }
                 Event::XinputRawKeyRelease(e) => {
@@ -261,7 +264,6 @@ impl<C: Connection> Overlay<C> {
 
     fn show(&self) -> Result<(), ReplyOrIdError> {
         self.conn.map_window(self.win_id)?;
-        // self.move_window_to_monitor()?;
         self.conn.flush()?;
         Ok(())
     }
@@ -316,13 +318,17 @@ impl<C: Connection> Overlay<C> {
 
     fn find_active_zone(&mut self, x: i16, y: i16) {
         let mut dist_sqr_min = u32::MAX;
+        let mut zone_area_min = u32::MAX;
 
         for i in 0..self.zones.len() {
             if self.zones[i].is_inside(x, y) {
                 let dist_sqr = self.zones[i].get_sqr_dist_to(x, y);
-                if dist_sqr < dist_sqr_min {
+                let zone_area = self.zones[i].get_area();
+                if dist_sqr < dist_sqr_min || dist_sqr == dist_sqr_min && zone_area < zone_area_min
+                {
                     self.active_zone = Some(i);
                     dist_sqr_min = dist_sqr;
+                    zone_area_min = zone_area;
                 }
             }
         }
