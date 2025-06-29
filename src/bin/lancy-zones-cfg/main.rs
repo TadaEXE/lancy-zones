@@ -1,12 +1,4 @@
-use std::{
-    fs,
-    path::{self, Path, PathBuf},
-};
-
-use clap::{Args, Parser, Subcommand, ValueEnum};
-use lancy_zones::config;
-
-use x11rb::connection::Connection;
+use clap::{Parser, Subcommand};
 
 mod cmd_impl;
 mod example;
@@ -60,6 +52,10 @@ enum Commands {
         config_name: String,
         zone_name: String,
     },
+    #[command()]
+    RefrashGlobalPos {},
+    #[command()]
+    RefrshSizes {},
 }
 
 fn main() {
@@ -78,22 +74,13 @@ fn main() {
             width,
             height,
         } => add_zone_cmd(&config_name, &zone_name, x, y, width, height),
-        // Commands::AddZoneRel {
-        //     config_name,
-        //     zone_name,
-        //     x,
-        //     y,
-        //     width,
-        //     height,
-        // } => todo!(),
-        Commands::RemoveZone {
-            config_name,
-            zone_name,
-        } => todo!(),
+        Commands::RemoveZone { .. } => todo!(),
         Commands::Assign {
             monitor_name,
             config_name,
         } => assign_cmd(&monitor_name, &config_name),
         Commands::Unassign { monitor_name } => unassing_cmd(&monitor_name),
+        Commands::RefrashGlobalPos {} => refresh_global_pos_cmd(),
+        Commands::RefrshSizes {} => refresh_sizes_cmd(),
     }
 }

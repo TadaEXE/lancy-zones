@@ -147,3 +147,17 @@ pub fn unassing_cmd(monitor_name: &str) {
     }
     config::save_cfg_file(&config);
 }
+
+pub fn refresh_global_pos_cmd() {
+    let mut config = config::load_cfg_file();
+    let (conn, screen) = make_conn();
+    config.refresh_all_global_monitor_pos(&conn, screen.root);
+    config::save_cfg_file(&config);
+}
+
+pub fn refresh_sizes_cmd() {
+    let mut config = config::load_cfg_file();
+    let (conn, screen) = make_conn();
+    config.refresh_all_monitor_sizes(&conn, screen.root);
+    config::save_cfg_file(&config);
+}

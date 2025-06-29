@@ -7,7 +7,6 @@ use std::rc::Rc;
 use lancy_zones::config::{init_cfg_file, load_cfg_file};
 use x11rb::connection::Connection;
 
-
 use crate::atoms::AtomContainer;
 use crate::overlay::Overlay;
 
@@ -20,7 +19,9 @@ fn main() {
     if !path.exists() {
         init_cfg_file(&conn, screen.root);
     }
-    let config = Rc::new(load_cfg_file());
+    let mut config = load_cfg_file();
+    config.refresh_all_global_monitor_pos(&conn, screen.root);
+    let config = Rc::new(config);
 
     let atoms = Rc::new(AtomContainer::new(&conn).unwrap());
     let screen = Rc::new(screen);

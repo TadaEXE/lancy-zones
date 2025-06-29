@@ -6,7 +6,10 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use x11rb::connection::Connection;
+use x11rb::{
+    connection::Connection,
+    protocol::{randr, xproto::Window},
+};
 
 use crate::util;
 
@@ -33,6 +36,18 @@ impl Config {
         self.monitor_configs
             .iter_mut()
             .find(|cfg| -> bool { cfg.name == mc_name })
+    }
+
+    pub fn refresh_all_global_monitor_pos<C: Connection>(&mut self, conn: &C, root_window: Window) {
+        for monitor in &mut self.monitors {
+            monitor.refresh_global_pos(conn, root_window);
+        }
+    }
+
+    pub fn refresh_all_monitor_sizes<C: Connection>(&mut self, conn: &C, root_window: Window) {
+        for monitor in &mut self.monitors {
+            monitor.refresh_size(conn, root_window);
+        }
     }
 }
 
@@ -77,6 +92,22 @@ impl Monitor {
 
     pub fn to_local_space(&self, x: i16, y: i16) -> (i16, i16) {
         (x - self.x, y - self.y)
+    }
+
+    pub fn refresh_global_pos<C: Connection>(&mut self, conn: &C, root_window: Window) {
+        let monitors = util::get_monitors(conn, root_window).unwrap();
+        if let Some(this) = monitors.into_iter().find(|x| x.name == self.name) {
+            self.x = this.x;
+            self.y = this.y;
+        }
+    }
+
+    pub fn refresh_size<C: Connection>(&mut self, conn: &C, root_window: Window) {
+        let monitors = util::get_monitors(conn, root_window).unwrap();
+        if let Some(this) = monitors.into_iter().find(|x| x.name == self.name) {
+            self.width = this.width;
+            self.height = this.height;
+        }
     }
 }
 
