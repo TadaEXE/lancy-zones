@@ -286,6 +286,18 @@ impl<C: Connection> Overlay<C> {
 
     fn show(&self) -> Result<(), ReplyOrIdError> {
         self.conn.map_window(self.win_id)?;
+        self.conn.configure_window(
+            self.win_id,
+            &ConfigureWindowAux {
+                x: Some(0),
+                y: Some(0),
+                width: None,
+                height: None,
+                border_width: None,
+                sibling: None,
+                stack_mode: None,
+            },
+        )?;
         self.conn.flush()?;
         Ok(())
     }
